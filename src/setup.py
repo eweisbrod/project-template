@@ -97,16 +97,11 @@ def _create_env(env_path: Path):
     if not output_dir:
         output_dir = "output"
 
-    # Write .env
     env_content = (
-        "# Local environment configuration\n"
-        "# Created by setup.py — edit as needed\n"
-        "# Use forward slashes (/) even on Windows\n"
-        "\n"
         f"DATA_DIR={data_dir}\n"
         f"OUTPUT_DIR={output_dir}\n"
     )
-    env_path.write_text(env_content)
+    env_path.write_text(env_content, encoding="utf-8")
     print(f"\n.env file created:")
     print(env_content)
 
