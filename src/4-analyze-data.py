@@ -3,15 +3,17 @@
 # Regression analysis and table output for the earnings event study.
 #
 # This script produces:
-#   1. Sample selection table (LaTeX)
-#   2. Frequency table by decade (LaTeX)
-#   3. Descriptive statistics (LaTeX)
-#   4. Correlation matrix (LaTeX)
-#   5. Regression table with SUE × SameSign interaction (LaTeX via pyfixest)
+#   1. Sample selection table (LaTeX via great_tables)
+#   2. Frequency table by decade (LaTeX via great_tables)
+#   3. Descriptive statistics (LaTeX via great_tables)
+#   4. Correlation matrix (LaTeX via great_tables)
+#   5. Regression table with SUE x SameSign interaction (LaTeX via pyfixest)
 #
-# pyfixest is modeled on R's fixest package — it uses the same formula syntax
-# (e.g., "y ~ x | fe1 + fe2") and supports multi-way clustering, high-
-# dimensional fixed effects, and formatted table output.
+# Tables 1-4 use great_tables (by Posit), which provides a clean API for
+# building publication-ready tables and exporting to LaTeX. Table 5 uses
+# pyfixest's native etable(type="tex") because great_tables' LaTeX export
+# does not yet support row stubs/groups, which pyfixest uses for the
+# regression layout.
 #
 # HOW TO RUN:
 #   uv run src/4-analyze-data.py
@@ -23,6 +25,7 @@
 import os
 import sys
 
+import great_tables as gt
 import polars as pl
 import pandas as pd
 import pyfixest as pf
@@ -41,8 +44,7 @@ os.makedirs(output_dir, exist_ok=True)
 
 regdata = pl.read_parquet(f"{data_dir}/regdata.parquet")
 
-# Standardize continuous controls so the SUE main effect in interaction models
-# is interpretable at the mean of the controls (see R version for details).
+# Standardize continuous controls for the interaction model.
 regdata = regdata.with_columns(
     ((pl.col("log_mve") - pl.col("log_mve").mean())
      / pl.col("log_mve").std()).alias("log_mve_std")
@@ -51,38 +53,33 @@ regdata = regdata.with_columns(
 print(f"regdata: {regdata.shape[0]:,} rows")
 
 
-# Table 1: Sample Selection ----------------------------------------------------
+# =============================================================================
+# Table 1: Sample Selection
+# =============================================================================
 
-# Step-by-step observation counts produced by script 2.
-
+# Read the step-by-step observation counts produced by script 2.
 sample_sel = pl.read_parquet(f"{data_dir}/sample-selection.parquet")
 
-# Build LaTeX table manually (simple enough that a template library isn't needed)
-lines = [
-    r"\begin{tabular}[t]{clrr}",
-    r"\toprule",
-    r"Step & Description & Obs & (Diff)\\",
-    r"\midrule",
-]
+# Compute the (Diff) column
+sel_pd = sample_sel.to_pandas()
+sel_pd["diff"] = sel_pd["obs"].shift(1) - sel_pd["obs"]
+sel_pd["(Diff)"] = sel_pd["diff"].apply(
+    lambda x: f"({x:,.0f})" if pd.notna(x) else ""
+)
+sel_pd["Obs"] = sel_pd["obs"].apply(lambda x: f"{x:,.0f}")
 
-obs_list = sample_sel["obs"].to_list()
-for i, row in enumerate(sample_sel.iter_rows(named=True)):
-    diff_str = ""
-    if i > 0:
-        diff = obs_list[i - 1] - row["obs"]
-        diff_str = f"({diff:,})"
-    lines.append(f"{row['step']} & {row['description']} & {row['obs']:,} & {diff_str}\\\\")
+tbl = (gt.GT(sel_pd[["step", "description", "Obs", "(Diff)"]])
+    .cols_label(step="Step", description="Description")
+)
 
-lines.append(r"\bottomrule")
-lines.append(r"\end{tabular}")
-
-tex = "\n".join(lines)
-with open(f"{output_dir}/sample-selection-py.tex", "w") as f:
-    f.write(tex)
+with open(f"{output_dir}/sample-selection-py.tex", "w", encoding="utf-8") as f:
+    f.write(tbl.as_latex())
 print("Table 1 (sample selection) saved")
 
 
-# Table 2: Observations by Decade ----------------------------------------------
+# =============================================================================
+# Table 2: Frequency by Decade
+# =============================================================================
 
 decade_data = (regdata
     .with_columns(
@@ -113,27 +110,20 @@ total = pl.DataFrame(
 )
 decade_data = pl.concat([decade_data, total])
 
-# Build LaTeX
-lines = [
-    r"\begin{tabular}[t]{lrrr}",
-    r"\toprule",
-    r"Year & Firm-Quarters & SameSign Quarters & Pct. SameSign\\",
-    r"\midrule",
-]
-for row in decade_data.iter_rows(named=True):
-    lines.append(
-        f"{row['Year']} & {row['Firm-Quarters']:,} & "
-        f"{row['SameSign Quarters']:,} & {row['Pct. SameSign']:.2%}\\\\"
-    )
-lines.append(r"\bottomrule")
-lines.append(r"\end{tabular}")
+tbl = (gt.GT(decade_data.to_pandas())
+    .fmt_integer(columns="Firm-Quarters", use_seps=True)
+    .fmt_integer(columns="SameSign Quarters", use_seps=True)
+    .fmt_percent(columns="Pct. SameSign", decimals=2)
+)
 
-with open(f"{output_dir}/freqtable-py.tex", "w") as f:
-    f.write("\n".join(lines))
+with open(f"{output_dir}/freqtable-py.tex", "w", encoding="utf-8") as f:
+    f.write(tbl.as_latex())
 print("Table 2 (frequency by decade) saved")
 
 
-# Table 3: Descriptive Statistics ----------------------------------------------
+# =============================================================================
+# Table 3: Descriptive Statistics
+# =============================================================================
 
 descrip_vars = ["bhar", "sue", "same_sign", "loss", "log_mve"]
 descrip_labels = {
@@ -149,35 +139,31 @@ for var in descrip_vars:
     col = regdata[var].drop_nulls()
     stats.append({
         "Variable": descrip_labels[var],
-        "N": f"{col.len():,}",
-        "Mean": f"{col.mean():.3f}",
-        "SD": f"{col.std():.3f}",
-        "Min": f"{col.min():.3f}",
-        "P25": f"{col.quantile(0.25):.3f}",
-        "Median": f"{col.median():.3f}",
-        "P75": f"{col.quantile(0.75):.3f}",
-        "Max": f"{col.max():.3f}",
+        "N": col.len(),
+        "Mean": col.mean(),
+        "SD": col.std(),
+        "Min": col.min(),
+        "P25": col.quantile(0.25),
+        "Median": col.median(),
+        "P75": col.quantile(0.75),
+        "Max": col.max(),
     })
 
 descrip_df = pd.DataFrame(stats)
 
-lines = [
-    r"\begin{tabular}[t]{lrrrrrrrr}",
-    r"\toprule",
-    " & ".join(descrip_df.columns) + r"\\",
-    r"\midrule",
-]
-for _, row in descrip_df.iterrows():
-    lines.append(" & ".join(str(v) for v in row) + r"\\")
-lines.append(r"\bottomrule")
-lines.append(r"\end{tabular}")
+tbl = (gt.GT(descrip_df)
+    .fmt_integer(columns="N", use_seps=True)
+    .fmt_number(columns=["Mean", "SD", "Min", "P25", "Median", "P75", "Max"], decimals=3)
+)
 
-with open(f"{output_dir}/descrip-py.tex", "w") as f:
-    f.write("\n".join(lines))
+with open(f"{output_dir}/descrip-py.tex", "w", encoding="utf-8") as f:
+    f.write(tbl.as_latex())
 print("Table 3 (descriptive stats) saved")
 
 
-# Table 4: Correlation Matrix --------------------------------------------------
+# =============================================================================
+# Table 4: Correlation Matrix
+# =============================================================================
 
 corrdata = (regdata
     .select(
@@ -191,37 +177,28 @@ corrdata = (regdata
 )
 
 corr = corrdata.corr()
+corr.insert(0, " ", corr.index)
 
-lines = [
-    r"\begin{tabular}[t]{l" + "r" * len(corr.columns) + "}",
-    r"\toprule",
-    " & " + " & ".join(corr.columns) + r"\\",
-    r"\midrule",
-]
-for var in corr.index:
-    vals = " & ".join(f"{corr.loc[var, c]:.3f}" for c in corr.columns)
-    lines.append(f"{var} & {vals}\\\\")
-lines.append(r"\bottomrule")
-lines.append(r"\end{tabular}")
+tbl = (gt.GT(corr)
+    .fmt_number(columns=["BHAR", "SUE", "SameSign", "LOSS", "SIZE"], decimals=3)
+    .cols_label(**{" ": ""})
+)
 
-with open(f"{output_dir}/corrtable-py.tex", "w") as f:
-    f.write("\n".join(lines))
+with open(f"{output_dir}/corrtable-py.tex", "w", encoding="utf-8") as f:
+    f.write(tbl.as_latex())
 print("Table 4 (correlation matrix) saved")
 
 
-# Table 5: Regression Table ----------------------------------------------------
+# =============================================================================
+# Table 5: Regression Table
+# =============================================================================
 
-# The main event study regression:
-#   BHAR = b1*SUE + b2*SameSign + b3*SUE×SameSign + controls + FE
-#
 # pyfixest uses the same formula syntax as R's fixest:
 #   "y ~ x1 * x2 | fe1 + fe2"
-#   vcov={"CRV1": "permno+fyearq"} for two-way clustering
+# Two-way clustering: vcov={"CRV1": "permno+fyearq"}
 
-# Convert to pandas for pyfixest (it requires pandas DataFrames)
 reg_pd = regdata.to_pandas()
 
-# Fit models — same 5 specifications as the R version
 m1 = pf.feols("bhar ~ sue", data=reg_pd)
 m2 = pf.feols("bhar ~ sue * same_sign", data=reg_pd)
 m3 = pf.feols("bhar ~ sue * same_sign | fyearq", data=reg_pd)
@@ -229,12 +206,13 @@ m4 = pf.feols("bhar ~ sue * same_sign | fyearq + ff12num", data=reg_pd)
 m5 = pf.feols("bhar ~ sue * same_sign + sue * log_mve_std + sue * loss | fyearq + ff12num",
                data=reg_pd)
 
-# Apply two-way clustering to all models
 for m in [m1, m2, m3, m4, m5]:
     m.vcov({"CRV1": "permno+fyearq"})
 
-# Generate LaTeX regression table via pyfixest's etable()
-# keep= shows only the coefficients we want (hides controls)
+# Generate LaTeX via pyfixest's native etable(type="tex").
+# We use etable(type="tex") rather than etable(type="gt").as_latex() because
+# great_tables' LaTeX export does not yet support row stubs/groups, which
+# pyfixest uses to organize coefficients, FE indicators, and fit statistics.
 tex = pf.etable(
     [m1, m2, m3, m4, m5],
     type="tex",
@@ -249,11 +227,11 @@ tex = pf.etable(
     model_heads=["Base", "Interaction", "Year FE", "Two-Way FE", "Controls"],
 )
 
-with open(f"{output_dir}/regression-py.tex", "w") as f:
+with open(f"{output_dir}/regression-py.tex", "w", encoding="utf-8") as f:
     f.write(tex)
 print("Table 5 (regression) saved")
 
-# Also print to console (etable type="md" prints directly, returns None)
+# Print regression to console for review
 pf.etable(
     [m1, m2, m3, m4, m5],
     type="md",
