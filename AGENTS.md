@@ -1,4 +1,4 @@
-# AGENTS.md - AI Assistant Context for project-template-r
+# AGENTS.md - AI Assistant Context for project-template
 
 > **What is this file?** AGENTS.md is an emerging open standard for providing
 > AI coding assistants with project context. It is supported by Claude Code,
@@ -9,11 +9,20 @@
 
 ## Project Overview
 
-This is an **R project template** for Accounting/Finance empirical research.
-It demonstrates an earnings announcement event study: downloading data from
-WRDS (Compustat quarterly + CRSP daily), merging databases, computing
-earnings surprises and abnormal returns, producing publication-ready figures,
-and outputting formatted tables to LaTeX and MS Word.
+This is a **polyglot project template** (Python + R + Stata) for
+Accounting/Finance empirical research. It demonstrates an earnings
+announcement event study: downloading data from WRDS (Compustat quarterly +
+CRSP daily), merging databases, computing earnings surprises and abnormal
+returns, producing publication-ready figures, and outputting formatted
+tables to LaTeX, MS Word, and RTF.
+
+Scripts 1-2 (download + transform) are **Python only**. Scripts 3-4
+(figures + analysis) have **parallel implementations** in Python, R, and
+Stata. All languages share the same data files (parquet for Python/R, .dta
+for Stata) and the same `.env` configuration.
+
+For a pure R version, see
+[project-template-r](https://github.com/eweisbrod/project-template-r).
 
 **This is a public teaching repository.** Code quality, readability, and
 extensive comments matter more than efficiency. When making changes, preserve
@@ -22,134 +31,137 @@ the teaching style and add comments explaining *why*, not just *what*.
 ## Project Structure
 
 ```
-project-template-r/
-├── .gitignore              # R and project-specific ignores
-├── AGENTS.md               # This file - AI assistant context
+project-template/
+├── .env.example            # Template for user's .env
+├── .gitignore              # Polyglot ignores (R + Python + Stata)
+├── AGENTS.md               # This file
 ├── CLAUDE.md               # Claude Code config (imports AGENTS.md)
 ├── README.md               # Main documentation
+├── pyproject.toml          # Python dependencies (managed by uv)
 ├── output/                 # Tables and figures (gitignored contents)
 ├── src/
-│   ├── setup.R                       # One-time project setup (creates .env)
-│   ├── utils.R                       # Helper functions (winsorize, FF industries,
-│   │                                 #   download_wrds, trading_day_window)
-│   ├── 1-download-data.R             # Download from WRDS to parquet files
-│   ├── 2-transform-data.R            # Merge, create variables, compute BHARs
-│   ├── 3-figures.R                   # Publication-ready figures
-│   ├── 4-analyze-data-and-tabulate-latex.R   # Tables for LaTeX output
-│   ├── 4-analyze-data-and-tabulate-word.R    # Tables for Word output
-│   └── run-all.R                             # Master script with logging
+│   ├── setup.py                      # One-time setup (creates .env, stores creds)
+│   ├── utils.py                      # Python helpers (download_wrds, FF12)
+│   ├── utils.R                       # R helpers (winsorize, FF industries, etc.)
+│   │
+│   ├── 1-download-data.py            # Download from WRDS (Python only)
+│   ├── 2-transform-data.py           # Merge + variables + BHARs (Python only)
+│   │
+│   ├── 3-figures.py                  # Figures (plotnine)
+│   ├── 3-figures.R                   # Figures (ggplot2)
+│   │
+│   ├── 4-analyze-data.py             # Tables (pyfixest, LaTeX)
+│   ├── 4-analyze-data.R              # Tables (fixest/modelsummary, LaTeX + Word)
+│   └── 4-analyze-data.do             # Tables (reghdfe/esttab, LaTeX + RTF)
 └── LICENSE
 ```
 
 ### Script Execution Order
 
-Scripts are numbered and should be run in order:
-1. `1-download-data.R` (requires WRDS credentials)
-2. `2-transform-data.R`
-3. `3-figures.R`
-4. `4-analyze-data-and-tabulate-latex.R` or `4-analyze-data-and-tabulate-word.R`
+1. `1-download-data.py` (requires WRDS credentials, ~20 min)
+2. `2-transform-data.py` (~2 min)
+3. `3-figures.py` or `3-figures.R` (pick one)
+4. `4-analyze-data.py` or `4-analyze-data.R` or `4-analyze-data.do` (pick one)
 
-Every R script loads `.env` via `dotenv` and sources `utils.R` at the top.
-Packages are auto-installed via `pacman::p_load()` -- no separate install step needed.
-See `1-download-data.R` for detailed comments on `.env` setup and keyring
-credential storage.
+Run Python scripts with `uv run src/script.py`. R scripts with
+`Rscript src/script.R`. Stata scripts with `do src/4-analyze-data.do`.
 
 ## Key Conventions
 
 ### Environment and Paths
 
-- **All paths come from the `.env` file** via the `dotenv` R package.
-  Never hardcode local paths in scripts.
-- Run `src/setup.R` to create `.env`, or create it manually.
+- **All paths come from the `.env` file.** Never hardcode local paths.
+- Run `uv run src/setup.py` to create `.env` and store WRDS credentials.
 - The `.env` file uses **forward slashes** even on Windows:
   `DATA_DIR=D:/Dropbox/your-project-name`
 - Two key variables: `DATA_DIR` (raw/processed data) and `OUTPUT_DIR`
-  (tables and figures, defaults to `output/`)
-- R scripts load paths with: `load_dot_env(".env");
-  data_dir <- Sys.getenv("DATA_DIR"); output_dir <- Sys.getenv("OUTPUT_DIR")`
+  (tables and figures).
+- Python: `load_dotenv(".env", override=True); data_dir = os.getenv("DATA_DIR")`
+- R: `load_dot_env(".env"); data_dir <- Sys.getenv("DATA_DIR")`
+- Stata: `doenv using ".env"; local data_dir "\`r(DATA_DIR)'"`
+
+### Credentials
+
+WRDS credentials are stored via the `keyring` package in the OS credential
+store (Windows Credential Manager / macOS Keychain). Both Python and R
+read the same keyring entries: service `"wrds"`, keys `"username"` and
+`"password"`. Stata uses `.env` + `doenv` for paths but does not access
+WRDS directly (it reads .dta files produced by Python).
+
+### Python Code Style
+
+- **uv** manages the virtual environment and dependencies (`pyproject.toml`)
+- **polars** for all data manipulation (not pandas). Arrow-native, zero-copy
+  with DuckDB, types don't corrupt on parquet round-trips.
+- **DuckDB** for querying parquet files and SQL joins
+- **psycopg2** for WRDS PostgreSQL connection (chunked server-side cursors)
+- **plotnine** for figures (ggplot2 syntax in Python)
+- **pyfixest** for regressions (fixest syntax: `"y ~ x | fe1 + fe2"`)
+- `sys.stdout.reconfigure(encoding="utf-8")` at the top of each script
+  (Windows terminal encoding fix)
+- `load_dotenv(".env", override=True)` — the `override=True` is important
+  so the `.env` file wins over any system-level environment variables.
 
 ### R Code Style
 
-- **`pacman::p_load()` is used instead of `library()`** -- it auto-installs
-  missing packages, so users don't need a separate install step. Each script
-  starts with `if (!require("pacman")) install.packages("pacman")` followed
-  by `pacman::p_load(...)`.
-- `tidyverse` is always loaded last to avoid package conflicts
-- The native pipe `|>` is preferred over `%>%`
-- `glue("{data_dir}/filename")` is used for dynamic file paths
-- Variable labels use LaTeX math notation (e.g., `$SUE$`, `$BHAR_{[-1,+1]}$`)
-- The `formattable` package handles number formatting in tables
-- `modelsummary` is used for regression tables; `kableExtra` for LaTeX;
-  `flextable` + `officer` for Word output
-- `fixest::feols` for fixed effects regressions (with `fixef.rm = "singletons"`)
+- **`pacman::p_load()`** auto-installs missing packages
+- `tidyverse` loaded last to avoid conflicts
+- Native pipe `|>` preferred over `%>%`
+- `fixest::feols` for regressions (with `fixef.rm = "singletons"`)
+- `modelsummary` for regression tables; `kableExtra` for LaTeX; `flextable`
+  + `officer` for Word output
+
+### Stata Code Style
+
+- **`reghdfe`** for fixed effects regressions
+- **`estout`/`esttab`** for table output (LaTeX + RTF)
+- **`projectpaths`** + **`doenv`** for portable path management
+- `estadd local` for indicator rows (Controls, FE)
+- `estfe` for automatic FE indicator rows (reghdfe integration)
+- Triple-slash `///` for line continuation
 
 ### Data and Variables
 
 - **WRDS** (Wharton Research Data Services) is the data source
-- **Compustat fundq**: `gvkey` (firm ID), `datadate` (fiscal quarter end),
-  `rdq` (earnings announcement date), `epspiq` (EPS), `saleq` (sales),
-  `ajexq` (split adjustment factor), `prccq` (quarter-end price)
-- **CRSP dsf_v2**: `permno` (security ID), `dlycaldt` (date), `dlyret` (return)
-- **CCM link**: maps `gvkey` to `permno` via date-range matching
-- **CRSP stocknames_v2**: SIC codes by permno with date ranges
-- `sue` = standardized unexpected earnings (seasonal random walk, price-scaled,
-  split-adjusted using `ajexq`)
-- `same_sign` = 1 if earnings change and sales change have the same sign
-- `bhar` = buy-and-hold abnormal return (stock return minus VW market return)
-- `loss` = binary indicator (1 if quarterly income < 0)
-- `FF12` = Fama-French 12 industry classification
-- Winsorization at 1%/99% is the default (see `winsorize_x` in utils.R)
-- Financial firms (SIC 60-69) and utilities (SIC 49) are excluded
+- `gvkey` = firm ID, `permno` = security ID, `rdq` = announcement date
+- `sue` = (ibq - ibq_lag4) / mve_lag1 — seasonal earnings change scaled
+  by prior-quarter market value (no per-share split adjustment needed)
+- `same_sign` = 1 if earnings change and sales change have same sign
+- `bhar` = buy-and-hold abnormal return ([-1, +1] trading days)
+- `loss` = 1 if quarterly income (ibq) < 0
+- `FF12` / `ff12num` = Fama-French 12 industry classification
+- Winsorization at 1%/99% (see `winsorize_x` in utils.R, `winsorize` in
+  `2-transform-data.py`)
+- Financials (SIC 60-69) and utilities (SIC 49) excluded
 
-### Download Methods
+### Output Files
 
-Script 1 demonstrates two WRDS download methods:
-- **`collect()`**: simplest, loads entire result into R memory. Fine for small tables.
-- **Chunked `ParquetFileWriter`**: streams rows in batches via server-side cursor.
-  Peak RAM proportional to batch size, not table size. Used for large tables.
-- **`download_wrds()` function** (utils.R): wraps the chunked method with
-  auto batch sizing based on `max_ram_mb` target (default 8 GB).
-
-### Merge Methods
-
-Script 2 demonstrates multiple merge approaches:
-- **dbplyr over DuckDB**: dplyr syntax executed by DuckDB on parquet files.
-  Data only enters R memory on `collect()`. Used for CCM + stocknames merge.
-- **DuckDB SQL**: raw SQL with `read_parquet()` for joining large parquet files.
-  Used for CRSP returns merge (~8M events against ~100M row CRSP daily).
-- **dplyr in R**: standard in-memory joins for small datasets.
-
-### Output
-
-- LaTeX output goes to `{output_dir}/*.tex`
-- Word output goes to `{output_dir}/*.docx`
-- Figures go to `{output_dir}/*.pdf` (LaTeX) or `*.png` (Word)
-- The LaTeX template on Overleaf reads the `.tex` files directly
+Each language appends a suffix to output filenames:
+- Python: `*-py.tex`
+- R: `*-r.tex`, `tables-r.docx`
+- Stata: `*-stata.tex`, `*-stata.rtf`, `sample-selection-stata.docx`
 
 ## Guidelines for AI Assistants
 
-- When editing R scripts, always read the file first to understand context.
-- Preserve extensive teaching comments -- this is a pedagogical repository.
-- Each R script loads `.env` and sets `data_dir` and `output_dir` at the top via `dotenv`.
-- Do not create new files unless necessary. Prefer editing existing files.
-- Do not remove comments or teaching notes from the code.
-- Do not store WRDS credentials in variables -- feed `keyring::key_get()` directly
-  into function calls.
+- Read files before editing. Preserve teaching comments.
+- Each Python script starts with `load_dotenv(".env", override=True)`.
+- Each R script starts with `load_dot_env(".env")` and `source("src/utils.R")`.
+- Do not store WRDS credentials in variables — call `keyring` inline.
+- When editing Python, use polars (not pandas) for data work.
+- When editing Stata, follow the `projectpaths` + `doenv` pattern.
 
 ## Common Pitfalls
 
-- **dbplyr vs dplyr**: In dbplyr contexts (before `collect()`), code runs on
-  the database server. Use `is.na()` not `is.null()` for NULL checks. Some R
-  functions need `sql()` wrappers.
-- **Stock split adjustment**: When comparing EPS across quarters, use `ajexq`
-  ratios to put values on a common share basis. See script 2 for details.
+- **polars vs pandas**: This template uses polars. Don't add pandas imports
+  for data work — only for the `.to_pandas()` bridge to pyfixest/`.to_stata()`.
+- **DuckDB DECIMAL precision**: PostgreSQL NUMERIC columns can have varying
+  precision across batches. The `_normalize_arrow_schema()` function in
+  utils.py casts these to float64 before writing to parquet.
+- **Trading day mapping**: Use `join_asof(strategy="forward")` (nearest
+  trading day on or after rdq), not `"backward"`. Weekend rdqs should map
+  to Monday, not Friday, to avoid overlapping event windows.
 - **CRSP v2 column names**: `dsf_v2` uses `dlycaldt`/`dlyret` (not `date`/`ret`).
-  Market returns are in `inddlyseriesdata` with `indno = 1000200` (not `dsi`/`vwretd`).
-- **CCM link filtering**: Apply Gow & Ding filters (`linktype`, `linkprim`) at
-  merge time, not download time, so the raw parquet stays reusable.
-- **Duplicate announcements**: Some firms report multiple quarters on the same
-  `rdq`. Dedup by keeping the most recent `datadate` per `permno + rdq`.
-- **FF49 industry codes**: The upper bound for "Restaurants, Hotels, Motels"
-  is SIC 7996, and for "Almost Nothing" is SIC 3999. Check `utils.R`.
-- **Forward slashes in .env**: Always use `/` not `\` in paths, even on Windows.
-- **fixest API**: Use `fixef.rm = "singletons"` (not the old `"both"`).
+- **CCM link filtering**: Apply Gow & Ding filters at merge time, not download.
+- **Forward slashes in .env**: Always use `/` not `\`, even on Windows.
+- **`override=True` in `load_dotenv()`**: Without this, system-level env
+  vars with the same name silently override the `.env` file.

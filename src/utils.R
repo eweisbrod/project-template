@@ -154,8 +154,8 @@ message("imported duplicate check function")
 #   sql         - a SQL query string, e.g.,
 #                 "SELECT * FROM crsp.dsf_v2 WHERE dlycaldt >= '1970-01-01'"
 #   output_path - file path for the output parquet file
-#   wrds_user   - your WRDS username (e.g., from keyring::key_get("wrds_user"))
-#   wrds_pw     - your WRDS password (e.g., from keyring::key_get("wrds_pw"))
+#   wrds_user   - your WRDS username (e.g., from keyring::key_get("wrds", "username"))
+#   wrds_pw     - your WRDS password (e.g., from keyring::key_get("wrds", "password"))
 #   max_ram_mb  - target peak RAM in MB (default 8000 = 8 GB). Used to auto-
 #                 calculate batch_size if batch_size is not specified.
 #   batch_size  - rows per chunk (default NULL = auto from max_ram_mb).
@@ -167,21 +167,21 @@ message("imported duplicate check function")
 #   # Auto batch size (8 GB default)
 #   download_wrds("SELECT * FROM comp.fundq",
 #                 "data/fundq.parquet",
-#                 keyring::key_get("wrds_user"),
-#                 keyring::key_get("wrds_pw"))
+#                 keyring::key_get("wrds", "username"),
+#                 keyring::key_get("wrds", "password"))
 #
 #   # Explicit batch size
 #   download_wrds("SELECT * FROM crsp.dsf_v2",
 #                 "data/crsp.parquet",
-#                 keyring::key_get("wrds_user"),
-#                 keyring::key_get("wrds_pw"),
+#                 keyring::key_get("wrds", "username"),
+#                 keyring::key_get("wrds", "password"),
 #                 batch_size = 500000)
 #
 #   # Low RAM machine (2 GB target)
 #   download_wrds("SELECT * FROM comp.funda",
 #                 "data/funda.parquet",
-#                 keyring::key_get("wrds_user"),
-#                 keyring::key_get("wrds_pw"),
+#                 keyring::key_get("wrds", "username"),
+#                 keyring::key_get("wrds", "password"),
 #                 max_ram_mb = 2000)
 
 download_wrds <- function(sql, output_path, wrds_user, wrds_pw,

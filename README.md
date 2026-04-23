@@ -5,148 +5,151 @@
 
 ## About This Template
 
-This R project template provides a complete pipeline for empirical
-Accounting/Finance research using data from WRDS. It covers:
+This polyglot project template provides a complete pipeline for empirical
+Accounting/Finance research using data from WRDS. It demonstrates the same
+analysis implemented in **Python**, **R**, and **Stata**, with parquet files
+as the common interchange format between languages.
 
-1. Downloading data from WRDS (Compustat + CRSP)
-2. Merging databases and creating variables
-3. Creating publication-ready figures
-4. Producing formatted tables for LaTeX or MS Word
+The pipeline:
+
+1. **Download** data from WRDS (Python)
+2. **Transform** data — merge databases, create variables, compute BHARs (Python)
+3. **Figures** — publication-ready plots (Python via plotnine, or R via ggplot2)
+4. **Tables** — regression tables and descriptive stats (Python via pyfixest, R via fixest/modelsummary, or Stata via reghdfe/esttab)
 
 The included example uses an **earnings announcement event study** to
 demonstrate each step: it downloads quarterly fundamentals and daily stock
 returns, computes standardized unexpected earnings (SUE), and tests whether
 the market reacts more strongly to earnings changes when sales move in the
-same direction. For more context on the pedagogical design behind this
-template, see the [parent project](https://github.com/eweisbrod/example-project).
+same direction (SUE x SameSign interaction).
+
+For a pure R version of this template, see
+[project-template-r](https://github.com/eweisbrod/project-template-r).
+For more context on the pedagogical design, see the
+[parent project](https://github.com/eweisbrod/example-project).
 
 ## Quick Start
 
 1. Click **"Use this template"** on GitHub to create your own repo
-2. Clone your new repo and open it in RStudio
-3. Run `src/setup.R` to create your `.env` file (it will prompt you for paths
-   and WRDS credentials)
-4. Run scripts in order: `1-download-data.R` through
-   `4-analyze-data-and-tabulate-*.R`
-
-Packages are auto-installed via `pacman::p_load()` -- no separate install
-step needed.
+2. Clone your new repo
+3. Run setup:
+   ```bash
+   uv run src/setup.py
+   ```
+   This creates your `.env` file and stores WRDS credentials. (Requires
+   [uv](https://docs.astral.sh/uv/getting-started/installation/) to be
+   installed.)
+4. Run the pipeline:
+   ```bash
+   uv run src/1-download-data.py     # ~20 min (WRDS download)
+   uv run src/2-transform-data.py    # ~2 min
+   uv run src/3-figures.py           # or: Rscript src/3-figures.R
+   uv run src/4-analyze-data.py      # or: Rscript src/4-analyze-data.R
+                                     # or: stata -b do src/4-analyze-data.do
+   ```
 
 ## Project Structure
 
 ```
 your-project-name/
-├── .gitignore              # R and project-specific ignores
+├── .env.example            # Template for user's .env (copy and edit)
+├── .gitignore              # Polyglot ignores (R + Python + Stata)
 ├── AGENTS.md               # AI assistant context (see below)
-├── CLAUDE.md               # Claude Code config (imports AGENTS.md)
+├── CLAUDE.md               # Claude Code config
 ├── README.md               # This file
+├── pyproject.toml           # Python dependencies (managed by uv)
 ├── output/                 # Tables and figures (gitignored contents)
 ├── src/
-│   ├── setup.R                       # One-time project setup (creates .env)
-│   ├── utils.R                       # Helper functions (winsorize, FF industries,
-│   │                                 #   download_wrds, trading_day_window)
-│   ├── 1-download-data.R             # Download from WRDS to parquet files
-│   ├── 2-transform-data.R            # Merge databases, create variables, BHARs
-│   ├── 3-figures.R                   # Publication-ready figures
-│   ├── 4-analyze-data-and-tabulate-latex.R   # Tables for LaTeX output
-│   ├── 4-analyze-data-and-tabulate-word.R    # Tables for Word output
-│   └── run-all.R                             # Master script with logging
+│   ├── setup.py                      # One-time setup (creates .env, stores creds)
+│   ├── utils.py                      # Python helpers (download_wrds, FF12 codes)
+│   ├── utils.R                       # R helpers (winsorize, FF industries, etc.)
+│   │
+│   ├── 1-download-data.py            # Download from WRDS to parquet (Python)
+│   ├── 2-transform-data.py           # Merge, create variables, BHARs (Python)
+│   │
+│   ├── 3-figures.py                  # Figures via plotnine (Python)
+│   ├── 3-figures.R                   # Figures via ggplot2 (R)
+│   │
+│   ├── 4-analyze-data.py             # Tables via pyfixest (Python, LaTeX)
+│   ├── 4-analyze-data.R              # Tables via fixest/modelsummary (R, LaTeX + Word)
+│   └── 4-analyze-data.do             # Tables via reghdfe/esttab (Stata, LaTeX + RTF)
 └── LICENSE
 ```
 
-### Script Execution Order
+### Language Roles
 
-Scripts are numbered and should be run in order. Every script loads `.env`
-via `dotenv` and sources `utils.R` at the top.
+| Script | Python | R | Stata |
+|--------|--------|---|-------|
+| 1. Download | `1-download-data.py` | — | — |
+| 2. Transform | `2-transform-data.py` | — | — |
+| 3. Figures | `3-figures.py` | `3-figures.R` | — |
+| 4. Analysis | `4-analyze-data.py` | `4-analyze-data.R` | `4-analyze-data.do` |
 
-| Script | Purpose |
-|--------|---------|
-| `1-download-data.R` | Download Compustat, CRSP, CCM link to parquet files |
-| `2-transform-data.R` | Merge databases, create SUE, compute BHARs |
-| `3-figures.R` | Generate publication-ready figures |
-| `4-analyze-data-and-tabulate-latex.R` | Regression tables for LaTeX |
-| `4-analyze-data-and-tabulate-word.R` | Regression tables for Word/Office |
-| `run-all.R` | Master script: runs everything with logging |
-
-You can run scripts individually (line by line in RStudio) or use `run-all.R`
-to run the full pipeline and produce a log file for replication purposes.
+Scripts 1-2 are Python only — they download from WRDS and save parquet files
+(plus `.dta` for Stata). Scripts 3-4 have parallel implementations: pick
+whichever language you prefer. All read the same data files.
 
 ## Prerequisites
 
-- **R** (>= 4.0) -- <https://cran.rstudio.com/>
-- **RStudio** -- <https://posit.co/download/rstudio-desktop/>
-- **Git** -- <https://git-scm.com/book/en/v2/Getting-Started-Installing-Git>
-- **WRDS account** -- <https://wrds-www.wharton.upenn.edu/>
+- **Python** (>= 3.12) — [python.org](https://www.python.org/downloads/)
+- **uv** — [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/)
+- **WRDS account** — [wrds-www.wharton.upenn.edu](https://wrds-www.wharton.upenn.edu/)
+
+Optional (for R or Stata scripts):
+- **R** (>= 4.0) and **RStudio** — [posit.co](https://posit.co/download/rstudio-desktop/)
+- **Stata** (16+) with `reghdfe`, `estout`, `projectpaths`, `doenv` packages
 
 ## Configuration
 
 ### Setting up `.env`
 
-Run `src/setup.R` to create your `.env` file interactively. Or create it
-manually in the project root:
+Run `uv run src/setup.py` to create your `.env` file interactively. Or
+copy `.env.example` to `.env` and edit manually:
 
 ```
 DATA_DIR=D:/Dropbox/your-project-name
-OUTPUT_DIR=output
+OUTPUT_DIR=D:/Dropbox/your-project-name/output
 ```
 
-- **`DATA_DIR`** -- where raw and processed data files are stored. This
-  should typically be outside the project folder (e.g., a shared Dropbox
-  folder) since Git is designed for code, not data.
-- **`OUTPUT_DIR`** -- where tables and figures are saved. Defaults to the
-  `output/` folder in the project. You might change this to a folder synced
-  with Overleaf, for example.
+- **`DATA_DIR`** — where raw and processed data files are stored (outside
+  the project folder, e.g., a shared Dropbox folder)
+- **`OUTPUT_DIR`** — where tables and figures are saved
 - Use **forward slashes** (`/`) even on Windows
 - The `.env` file is gitignored so each collaborator has their own copy
-- Each script reads this via `dotenv::load_dot_env(".env")`
 
 ### WRDS Credentials
 
 WRDS credentials are stored securely using the `keyring` package (not in
-code or `.env`). See the detailed setup comments at the top of
-`src/1-download-data.R`.
+code or `.env`). Both Python and R read from the same keyring entries
+(`service="wrds"`, keys `"username"` and `"password"`), so you only need
+to set them once via `setup.py`.
+
+### Stata Setup
+
+Stata requires a one-time registration of the project directory:
+
+```stata
+ssc install estout
+ssc install reghdfe
+ssc install projectpaths
+net install doenv, from("https://github.com/vikjam/doenv/raw/master/")
+project_paths_list, add project(project-template) path("C:/_git/project-template")
+```
 
 ## Output
 
 Output goes to the directory specified by `OUTPUT_DIR` in your `.env` file.
-By default this is the `output/` folder in the project (gitignored).
 
-- **LaTeX**: `*.tex` files that can be read directly by an Overleaf project.
-  Example Overleaf template: <https://www.overleaf.com/read/ctmwnmdcypzh>
-- **Word**: `*.docx` files with all tables and figures
-- **Figures**: `*.pdf` (LaTeX) or `*.png` (Word)
-
-## Customizing for Your Project
-
-1. Run `src/setup.R` or update `.env` with your paths
-2. Edit `src/1-download-data.R` to download the data you need
-3. Adapt `src/2-transform-data.R` for your variables and sample filters
-4. Modify the figure and table scripts for your analyses
-5. Update this README with your project's description
+- **LaTeX**: `*-r.tex`, `*-py.tex`, `*-stata.tex` files for Overleaf
+- **Word**: `tables-r.docx` (from R) and `*-stata.rtf` (from Stata)
+- **Figures**: `*.pdf` (LaTeX) and `*.png` (Word/PowerPoint)
 
 ## About AGENTS.md and CLAUDE.md
 
-You may notice two AI-related files in this repo:
-
 - **`AGENTS.md`** is part of an emerging open standard for giving AI coding
   assistants context about a project. Tools like GitHub Copilot, Cursor, and
-  Windsurf read it automatically. It describes the project structure,
-  conventions, and common pitfalls so that AI tools can assist more
-  effectively. Even if you don't use AI tools, it serves as useful project
-  documentation.
-
-- **`CLAUDE.md`** is a one-line file that tells Claude Code (Anthropic's CLI
-  tool) to read `AGENTS.md`. Claude Code reads `CLAUDE.md` rather than
-  `AGENTS.md` directly, so this file bridges the two. If you want to add
-  Claude-specific instructions, you can add them below the `@AGENTS.md`
-  import line.
-
-This layered approach means project conventions are written once in
-`AGENTS.md` and shared across all AI tools.
-
-For more details, see:
-- [Linux Foundation AI Agent Configuration](https://www.linuxfoundation.org/press/linux-foundation-launches-open-standard-for-configuring-ai-coding-agents)
-- [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code/memory)
+  Windsurf read it automatically.
+- **`CLAUDE.md`** tells Claude Code to read `AGENTS.md`.
 
 ## License
 

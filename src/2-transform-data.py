@@ -506,5 +506,7 @@ sel_df = pl.DataFrame(sample_selection)
 print("\nSample selection:")
 print(sel_df)
 sel_df.write_parquet(f"{data_dir}/sample-selection.parquet")
+# Also save as .dta so the Stata script can read it
+sel_df.to_pandas().to_stata(f"{data_dir}/sample-selection.dta", write_index=False)
 
 print("\nDone. Output saved to:", data_dir)
