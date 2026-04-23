@@ -119,12 +119,11 @@ label var loss        "LOSS"
 label var log_mve     "ln(MVE)"
 label var log_mve_std "ln(MVE) std"
 
-// Define controls as a global macro (keeps later commands short)
-global controls c.sue##c.log_mve_std c.sue##i.loss
-
-// We'll use estadd to add indicator rows for Controls/FE rather than
-// indicate(), because indicate() has trouble matching compound coefficient
-// names from interaction operators (##).
+// Define controls as a global macro (keeps later commands short).
+// We use # (interaction only) instead of ## (full factorial) because sue
+// is already in the model from c.sue##i.same_sign. Using ## would add
+// redundant sue main effects that Stata keeps as zero coefficients.
+global controls log_mve_std c.sue#c.log_mve_std i.loss c.sue#i.loss
 
 
 /******************************************************************************
@@ -223,21 +222,23 @@ eststo m4, title("Two-Way FE"): ///
 eststo m5, title("Controls"): ///
     reghdfe bhar c.sue##i.same_sign $controls, vce(cluster permno fyearq) absorb(fyearq ff12num)
 
-// Add indicator rows manually via estadd. This is cleaner than indicate()
-// when the model includes interaction operators (##) whose compound coefficient
-// names are hard to match.
+// Add a Controls indicator row via estadd (estadd is simpler than indicate()
+// for compound coefficient names from interaction operators).
 estadd local controls "":    m1 m2 m3 m4
 estadd local controls "Yes": m5
 
-// estfe trick for FE indicator rows — must rerun before each esttab call.
+// estfe adds FE indicator rows to stored estimates. It reads reghdfe's
+// absorbed FE metadata and generates the indicate() string automatically.
+// We also label _cons as "Constant" so it shows which models estimate one.
+// Must rerun estfe before each esttab call — it stores results in r().
 // http://scorreia.com/software/reghdfe/faq.html
-estfe . m*, labels(fyearq "Year FE" ff12num "Industry FE")
 
-// Drop coefficients we don't want displayed: baseline categories (0*),
-// constant, and all control variables + their interactions with SUE.
-local droplist 0* _cons log_mve_std 1.loss c.sue#c.log_mve_std 1.loss#c.sue
+// Drop baseline categories (0*), constant, and control coefficients.
+// Only sue, 1.same_sign, and 1.same_sign#c.sue remain displayed.
+local droplist 0* log_mve_std c.sue#c.log_mve_std 1.loss 1.loss#c.sue _cons
 
 // --- Preview ---
+estfe . m*, labels(fyearq "Year FE" ff12num "Industry FE" _cons "Constant")
 esttab, ///
     drop(`droplist') ///
     mtitles label ///
@@ -250,9 +251,9 @@ esttab, ///
           labels("Controls" "N" "R-squared" "R-sq Within"))
 
 // --- LaTeX ---
-estfe . m*, labels(fyearq "Year FE" ff12num "Industry FE")
+estfe . m*, labels(fyearq "Year FE" ff12num "Industry FE" _cons "Constant")
 esttab using "`output_dir'/regression-stata.tex", replace compress booktabs ///
-    substitute(\_ _ _cons Constant) ///
+    substitute(\_ _) ///
     drop(`droplist') ///
     mtitles label nolegend nonotes ///
     title("Regression of BHAR on SUE x SameSign") ///
@@ -265,7 +266,7 @@ esttab using "`output_dir'/regression-stata.tex", replace compress booktabs ///
           labels("Controls" "N" "\$R^2\$" "\$R^2\$ Within"))
 
 // --- Word (RTF) ---
-estfe . m*, labels(fyearq "Year FE" ff12num "Industry FE")
+estfe . m*, labels(fyearq "Year FE" ff12num "Industry FE" _cons "Constant")
 esttab using "`output_dir'/regression-stata.rtf", replace ///
     drop(`droplist') ///
     mtitles label nolegend nonotes ///
