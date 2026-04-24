@@ -126,6 +126,9 @@ print("Table 2 (frequency by decade) saved")
 # =============================================================================
 
 descrip_vars = ["bhar", "sue", "same_sign", "loss", "log_mve"]
+# Plain text labels here — great_tables auto-escapes LaTeX special characters,
+# so math mode ($SUE$) would get mangled. For publication formatting, paste
+# the numbers into the Overleaf template where math mode labels are set manually.
 descrip_labels = {
     "bhar": "BHAR[-1,+1]",
     "sue": "SUE",

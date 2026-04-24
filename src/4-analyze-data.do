@@ -159,27 +159,23 @@ esttab using "`output_dir'/freqtable-stata.rtf", replace ///
 eststo clear
 estpost summarize bhar sue same_sign loss log_mve, detail
 
+// NOTE: All cell statistics must be in ONE quoted string to produce a
+// horizontal (single-row-per-variable) layout. Multiple quoted strings
+// in cells() create stacked rows — that's an estout convention.
+local dcells "count(fmt(%12.0gc)) mean(fmt(%9.3fc)) sd(fmt(%9.3fc)) min(fmt(%9.3fc)) p25(fmt(%9.3fc)) p50(fmt(%9.3fc)) p75(fmt(%9.3fc)) max(fmt(%9.3fc))"
+
 // --- Preview ---
-esttab ., replace noobs nonumbers label ///
-    cells("count(fmt(%12.0gc)) mean(fmt(%9.3fc)) sd(fmt(%9.3fc)) " ///
-          "min(fmt(%9.3fc)) p25(fmt(%9.3fc)) p50(fmt(%9.3fc)) " ///
-          "p75(fmt(%9.3fc)) max(fmt(%9.3fc))") compress
+esttab ., replace noobs nonumbers label cells("`dcells'") compress
 
 // --- LaTeX ---
 esttab using "`output_dir'/descrip-stata.tex", replace compress booktabs ///
-    cells("count(fmt(%12.0gc)) mean(fmt(%9.3fc)) sd(fmt(%9.3fc)) " ///
-          "min(fmt(%9.3fc)) p25(fmt(%9.3fc)) p50(fmt(%9.3fc)) " ///
-          "p75(fmt(%9.3fc)) max(fmt(%9.3fc))") ///
-    title("Descriptive Statistics") ///
+    cells("`dcells'") ///
     nomtitles nonumbers noobs label ///
     substitute(\_ _)
 
 // --- Word (RTF) ---
 esttab using "`output_dir'/descrip-stata.rtf", replace ///
-    cells("count(fmt(%12.0gc)) mean(fmt(%9.3fc)) sd(fmt(%9.3fc)) " ///
-          "min(fmt(%9.3fc)) p25(fmt(%9.3fc)) p50(fmt(%9.3fc)) " ///
-          "p75(fmt(%9.3fc)) max(fmt(%9.3fc))") compress ///
-    title("Descriptive Statistics") ///
+    cells("`dcells'") compress ///
     nomtitles nonumbers noobs label
 
 
