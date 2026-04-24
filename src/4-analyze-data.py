@@ -245,14 +245,28 @@ tex = pf.etable(
         "Year FE": ["", "", "Yes", "Yes", "Yes"],
         "Industry FE": ["", "", "", "Yes", "Yes"],
         "Controls": ["", "", "", "", "Yes"],
-        "$R^2$ Within": [
-            f"{m._r2_within:.3f}" if (m._r2_within is not None
-                                      and str(m._r2_within) != "nan") else ""
-            for m in [m1, m2, m3, m4, m5]
-        ],
     },
     model_heads=["Base", "Interaction", "Year FE", "Two-Way FE", "Controls"],
 )
+
+# Append R² Within row after the R² row. custom_model_stats places custom
+# rows above the default stats, but we want R² Within below R².
+r2_within_vals = " & ".join(
+    f"{m._r2_within:.3f}" if (m._r2_within is not None
+                              and str(m._r2_within) != "nan") else ""
+    for m in [m1, m2, m3, m4, m5]
+)
+r2_within_line = f"$R^2$ Within & {r2_within_vals} \\\\\n\\addlinespace[0.5ex]"
+
+# Find the R² line and insert R² Within after it using simple string ops
+lines = tex.split("\n")
+new_lines = []
+for line in lines:
+    new_lines.append(line)
+    if "$R^2$ &" in line and "Within" not in line:
+        new_lines.append("\\addlinespace[0.5ex]")
+        new_lines.append(r2_within_line)
+tex = "\n".join(new_lines)
 
 with open(f"{output_dir}/regression-py.tex", "w", encoding="utf-8") as f:
     f.write(tex)
@@ -281,11 +295,6 @@ pf.etable(
         "Year FE": ["", "", "Yes", "Yes", "Yes"],
         "Industry FE": ["", "", "", "Yes", "Yes"],
         "Controls": ["", "", "", "", "Yes"],
-        "R² Within": [
-            f"{m._r2_within:.3f}" if (m._r2_within is not None
-                                      and str(m._r2_within) != "nan") else ""
-            for m in [m1, m2, m3, m4, m5]
-        ],
     },
     model_heads=["Base", "Interaction", "Year FE", "Two-Way FE", "Controls"],
 )
