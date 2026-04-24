@@ -213,16 +213,43 @@ for m in [m1, m2, m3, m4, m5]:
 # We use etable(type="tex") rather than etable(type="gt").as_latex() because
 # great_tables' LaTeX export does not yet support row stubs/groups, which
 # pyfixest uses to organize coefficients, FE indicators, and fit statistics.
+# coef_fmt controls the display: b* adds significance stars to the coefficient,
+# t:.2f formats t-statistics to 2 decimal places.
+# felabels renames the raw FE variable names to plain English.
+# custom_model_stats adds R² Within and Controls indicator rows.
+# Labels use LaTeX math mode for variable names.
 tex = pf.etable(
     [m1, m2, m3, m4, m5],
     type="tex",
-    coef_fmt="b \n (t)",
+    coef_fmt="b* \n (t:.2f)",
     signif_code=[0.01, 0.05, 0.1],
     keep=["sue$", "^same_sign$", "^sue:same_sign$"],
     labels={
-        "sue": "SUE",
-        "same_sign": "SameSign",
-        "sue:same_sign": "SUE x SameSign",
+        "sue": "$SUE$",
+        "same_sign": "$SameSign$",
+        "sue:same_sign": "$SUE \\times SameSign$",
+    },
+    # pyfixest uses slightly different internal FE names when FEs are absorbed
+    # alone vs. together (e.g., "fyearq" vs "fyearq "). Map all variants.
+    felabels={
+        "fyearq": "Year FE",
+        "fyearq ": "Year FE",
+        "ff12num": "Industry FE",
+        " ff12num": "Industry FE",
+    },
+    # Use show_fe=False and handle FE indicators via custom_model_stats,
+    # because pyfixest's auto FE display duplicates "Year FE" when fyearq
+    # appears in different absorb configurations across models.
+    show_fe=False,
+    custom_model_stats={
+        "Year FE": ["", "", "Yes", "Yes", "Yes"],
+        "Industry FE": ["", "", "", "Yes", "Yes"],
+        "Controls": ["", "", "", "", "Yes"],
+        "$R^2$ Within": [
+            f"{m._r2_within:.3f}" if (m._r2_within is not None
+                                      and str(m._r2_within) != "nan") else ""
+            for m in [m1, m2, m3, m4, m5]
+        ],
     },
     model_heads=["Base", "Interaction", "Year FE", "Two-Way FE", "Controls"],
 )
@@ -231,17 +258,34 @@ with open(f"{output_dir}/regression-py.tex", "w", encoding="utf-8") as f:
     f.write(tex)
 print("Table 5 (regression) saved")
 
-# Print regression to console for review
+# Print regression to console for review (plain text labels for markdown)
 pf.etable(
     [m1, m2, m3, m4, m5],
     type="md",
-    coef_fmt="b \n (t)",
+    coef_fmt="b* \n (t:.2f)",
     signif_code=[0.01, 0.05, 0.1],
     keep=["sue$", "^same_sign$", "^sue:same_sign$"],
     labels={
         "sue": "SUE",
         "same_sign": "SameSign",
         "sue:same_sign": "SUE x SameSign",
+    },
+    felabels={
+        "fyearq": "Year FE",
+        "fyearq ": "Year FE",
+        "ff12num": "Industry FE",
+        " ff12num": "Industry FE",
+    },
+    show_fe=False,
+    custom_model_stats={
+        "Year FE": ["", "", "Yes", "Yes", "Yes"],
+        "Industry FE": ["", "", "", "Yes", "Yes"],
+        "Controls": ["", "", "", "", "Yes"],
+        "R² Within": [
+            f"{m._r2_within:.3f}" if (m._r2_within is not None
+                                      and str(m._r2_within) != "nan") else ""
+            for m in [m1, m2, m3, m4, m5]
+        ],
     },
     model_heads=["Base", "Interaction", "Year FE", "Two-Way FE", "Controls"],
 )
