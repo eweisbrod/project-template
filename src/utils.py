@@ -123,9 +123,11 @@ def download_wrds(
     If batch_size is not specified, it is auto-calculated from max_ram_mb by
     peeking at the number of columns in the query result:
         batch_size = max_ram_mb * 1e6 / (n_columns * 8)
-    This means narrow queries (e.g., 3 columns) get huge batches (few
-    round-trips), while wide queries (e.g., 1000 columns) get smaller
-    batches to stay within the RAM target.
+    The auto-sized value is then SILENTLY CAPPED at 5,000,000 rows so that
+    users see periodic progress output instead of a long silent fetch on
+    huge narrow tables (CRSP daily would otherwise be one batch of ~333M
+    rows = 4 minutes of silence). The cap only applies to auto-sized
+    batches; if you pass batch_size explicitly, your value is respected.
 
     NOTE: Actual peak RAM = max_ram_mb + ~1-2 GB baseline overhead (Python
     interpreter, loaded packages, writer buffers). On a 16 GB machine the
@@ -151,7 +153,12 @@ def download_wrds(
         n_cols = len(peek_cursor.description)
         peek_cursor.close()
         # ~8 bytes per value (floats, ints, dates are all 8 bytes in memory)
-        batch_size = max(1_000, int(max_ram_mb * 1e6 / (n_cols * 8)))
+        raw = max(1_000, int(max_ram_mb * 1e6 / (n_cols * 8)))
+        # Silent cap: large narrow tables would otherwise be fetched in one
+        # giant batch, leaving the user staring at no output for minutes.
+        # Capping at 5M lets progress messages print every batch (~10-20s on
+        # a 100M-row download) so users see things moving.
+        batch_size = min(raw, 5_000_000)
         print(f"  Auto batch size: {batch_size:,} rows "
               f"({n_cols} columns, {max_ram_mb:,} MB RAM target)")
 
@@ -170,7 +177,15 @@ def download_wrds(
 
         total_rows += len(rows)
         elapsed = time.time() - start
-        print(f"\r  {total_rows:,} rows | {elapsed / 60:.1f} min elapsed", end="")
+        # Show file size on disk so users see bytes accumulating across
+        # batches, not just row count.
+        size_mb = (Path(output_path).stat().st_size / 1e6
+                   if Path(output_path).exists() else 0)
+        print(
+            f"\r  {total_rows:,} rows | {elapsed / 60:.1f} min | "
+            f"~{size_mb:.0f} MB on disk",
+            end="",
+        )
 
         # Convert list-of-tuples to pyarrow Table
         col_names = [desc[0] for desc in cursor.description]

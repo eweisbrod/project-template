@@ -180,7 +180,12 @@ while True:
 
     total_rows += len(rows)
     elapsed = time.time() - start
-    print(f"\r  {total_rows:,} rows | {elapsed / 60:.1f} min elapsed", end="")
+    size_mb = Path(fundq_path).stat().st_size / 1e6 if Path(fundq_path).exists() else 0
+    print(
+        f"\r  {total_rows:,} rows | {elapsed / 60:.1f} min | "
+        f"~{size_mb:.0f} MB on disk",
+        end="",
+    )
 
     # Convert the list of tuples to a pyarrow Table.
     # cursor.description gives us the column names from the SQL result.
