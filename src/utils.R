@@ -132,86 +132,80 @@ message("imported duplicate check function")
 # download), which shows each step in detail. This function wraps that pattern
 # so you can reuse it without repeating the boilerplate.
 #
-# The function manages its own WRDS connection — it opens one, streams the
-# query results to parquet, and disconnects when done.
+# API: takes a dbplyr lazy table (constructed via tbl() + dplyr verbs) and
+# streams the query results to parquet using the existing connection. This
+# is the same shape as Ian Gow's db2pq::lazy_tbl_to_pq(), with the addition
+# of auto-sized batches and zstd compression by default.
 #
 # RAM MANAGEMENT
 # Peak RAM is roughly: batch_size × n_columns × 8 bytes.
 # If you don't specify batch_size, the function auto-calculates it from
 # max_ram_mb by peeking at the number of columns in the query result:
 #   batch_size = floor(max_ram_mb × 1e6 / (n_columns × 8))
-# For example, with max_ram_mb = 8000 (8 GB) and 3 columns:
-#   batch_size = 333 million rows (i.e., the whole table in one chunk — fine)
-# With 1000 columns:
-#   batch_size = 1 million rows (reasonable chunks)
+# For example, with max_ram_mb = 8000 (8 GB) and 3 columns the raw target
+# would be 333 million rows. We then SILENTLY CAP this at 5 million rows
+# so users see periodic progress output instead of a long silent fetch
+# (cost: a handful of extra round-trips on huge narrow tables, negligible).
+# The cap is only applied to auto-sized batches; if you pass batch_size
+# explicitly, your value is respected as-is.
 #
 # NOTE: Actual peak RAM will be max_ram_mb plus ~1-2 GB of baseline overhead
-# (R session, loaded packages, parquet writer buffers). The max_ram_mb target
-# controls the chunk contribution only. On a 16 GB machine the default of
-# 8 GB is conservative; on a 4 GB machine, try max_ram_mb = 2000.
+# (R session, loaded packages, parquet writer buffers). On a 16 GB machine
+# the default of 8 GB is conservative; on a 4 GB machine, try max_ram_mb = 2000.
 #
 # Arguments:
-#   sql         - a SQL query string, e.g.,
-#                 "SELECT * FROM crsp.dsf_v2 WHERE dlycaldt >= '1970-01-01'"
+#   tbl         - a dbplyr lazy table (e.g. tbl(wrds, ...) |> filter() |> select())
 #   output_path - file path for the output parquet file
-#   wrds_user   - your WRDS username (e.g., from keyring::key_get("wrds", "username"))
-#   wrds_pw     - your WRDS password (e.g., from keyring::key_get("wrds", "password"))
 #   max_ram_mb  - target peak RAM in MB (default 8000 = 8 GB). Used to auto-
 #                 calculate batch_size if batch_size is not specified.
-#   batch_size  - rows per chunk (default NULL = auto from max_ram_mb).
-#                 Set explicitly to override the auto-calculation.
+#   batch_size  - rows per chunk (default NULL = auto from max_ram_mb,
+#                 capped at 5M). Set explicitly to override.
+#   compression - parquet compression (default "zstd"; smaller files than
+#                 the arrow default of "snappy")
 #
 # Returns: invisible(total_rows) — the number of rows downloaded.
 #
 # Examples:
-#   # Auto batch size (8 GB default)
-#   download_wrds("SELECT * FROM comp.fundq",
-#                 "data/fundq.parquet",
-#                 keyring::key_get("wrds", "username"),
-#                 keyring::key_get("wrds", "password"))
+#   # Pipe a lazy tbl into the function (most common):
+#   tbl(wrds, in_schema("crsp", "dsf_v2")) |>
+#     filter(dlycaldt >= "1970-01-01") |>
+#     select(permno, dlycaldt, dlyret) |>
+#     download_wrds("data/crsp.parquet")
 #
-#   # Explicit batch size
-#   download_wrds("SELECT * FROM crsp.dsf_v2",
-#                 "data/crsp.parquet",
-#                 keyring::key_get("wrds", "username"),
-#                 keyring::key_get("wrds", "password"),
-#                 batch_size = 500000)
+#   # Lower RAM target (e.g. 4 GB machine):
+#   tbl(wrds, in_schema("comp", "funda")) |>
+#     download_wrds("data/funda.parquet", max_ram_mb = 2000)
 #
-#   # Low RAM machine (2 GB target)
-#   download_wrds("SELECT * FROM comp.funda",
-#                 "data/funda.parquet",
-#                 keyring::key_get("wrds", "username"),
-#                 keyring::key_get("wrds", "password"),
-#                 max_ram_mb = 2000)
+#   # Explicit batch size (no cap applied):
+#   tbl(wrds, ...) |> download_wrds("out.parquet", batch_size = 500000)
 
-download_wrds <- function(sql, output_path, wrds_user, wrds_pw,
-                          max_ram_mb = 8000, batch_size = NULL) {
+download_wrds <- function(tbl, output_path, max_ram_mb = 8000,
+                          batch_size = NULL, compression = "zstd") {
 
-  # Connect to WRDS
-  wrds_dl <- DBI::dbConnect(
-    RPostgres::Postgres(),
-    host     = 'wrds-pgdata.wharton.upenn.edu',
-    port     = 9737,
-    user     = wrds_user,
-    password = wrds_pw,
-    sslmode  = 'require',
-    dbname   = 'wrds'
-  )
+  # Extract connection and SQL from the lazy tbl. dbplyr::sql_render translates
+  # the dplyr chain to SQL; remote_con returns the underlying DBI connection.
+  con <- dbplyr::remote_con(tbl)
+  sql <- as.character(dbplyr::sql_render(tbl))
 
   # Auto-calculate batch_size from max_ram_mb if not specified.
   # We peek at the number of columns by running the query with LIMIT 0.
   if (is.null(batch_size)) {
-    peek <- DBI::dbGetQuery(wrds_dl, paste0("SELECT * FROM (", sql, ") q LIMIT 0"))
+    peek <- DBI::dbGetQuery(con, paste0("SELECT * FROM (", sql, ") q LIMIT 0"))
     n_cols <- ncol(peek)
     # ~8 bytes per value (doubles, dates, integers are all 8 bytes in R)
-    batch_size <- max(1000L, as.integer(floor(max_ram_mb * 1e6 / (n_cols * 8))))
+    raw <- max(1000L, as.integer(floor(max_ram_mb * 1e6 / (n_cols * 8))))
+    # Silent cap: large narrow tables would otherwise be fetched in one
+    # giant batch, leaving the user staring at no output for minutes.
+    # Capping at 5M lets progress messages print every batch (~10-20s on
+    # a 100M-row download) so users see things moving.
+    batch_size <- min(raw, 5000000L)
     message(sprintf("  Auto batch size: %s rows (%d columns, %s MB RAM target)",
                     format(batch_size, big.mark = ","), n_cols,
                     format(max_ram_mb, big.mark = ",")))
   }
 
   # Open a server-side cursor and stream rows in batches
-  res <- DBI::dbSendQuery(wrds_dl, sql)
+  res <- DBI::dbSendQuery(con, sql)
   sink <- arrow::FileOutputStream$create(output_path)
   writer <- NULL
   total_rows <- 0
@@ -223,7 +217,7 @@ download_wrds <- function(sql, output_path, wrds_user, wrds_pw,
 
     total_rows <- total_rows + nrow(chunk)
 
-    # Progress: rows, elapsed time, file size
+    # Progress: rows, elapsed time, file size on disk
     elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
     size_so_far <- if (file.exists(output_path)) file.size(output_path) / 1e6 else 0
     cat(sprintf("\r  %s rows | %.1f min | ~%.0f MB on disk",
@@ -237,7 +231,7 @@ download_wrds <- function(sql, output_path, wrds_user, wrds_pw,
         sink = sink,
         properties = arrow::ParquetWriterProperties$create(
           column_names = tab$schema$names,
-          compression = "zstd"
+          compression = compression
         )
       )
     }
@@ -249,9 +243,6 @@ download_wrds <- function(sql, output_path, wrds_user, wrds_pw,
   sink$close()
   DBI::dbClearResult(res)
   cat("\n")
-
-  # Disconnect
-  DBI::dbDisconnect(wrds_dl)
 
   size_mb <- file.size(output_path) / 1e6
   message(sprintf("Saved %s rows, %.1f MB -> %s",
