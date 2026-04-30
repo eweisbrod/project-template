@@ -5,54 +5,76 @@
 
 ## About This Template
 
-This polyglot project template provides a complete pipeline for empirical
-Accounting/Finance research using data from WRDS. It demonstrates the same
-analysis implemented in **Python**, **R**, and **Stata**, with parquet files
-as the common interchange format between languages.
+This is a **swiss-army-knife project template** for empirical
+Accounting/Finance research using data from WRDS. The repository ships with
+a complete pipeline implemented in **R**, **Python**, and **Stata** in
+parallel, with parquet files as the common interchange format between
+languages. At setup time you pick which language(s) you want and the
+template prunes the irrelevant files for you.
 
-The pipeline:
+The pipeline (in each chosen language):
 
-1. **Download** data from WRDS (Python)
-2. **Transform** data — merge databases, create variables, compute BHARs (Python)
-3. **Figures** — publication-ready plots (Python via plotnine, or R via ggplot2)
-4. **Tables** — regression tables and descriptive stats (Python via pyfixest, R via fixest/modelsummary, or Stata via reghdfe/esttab)
+1. **Download** raw data from WRDS to parquet files
+2. **Transform** — merge databases, create variables, compute BHARs
+3. **Figures** — publication-ready plots
+4. **Analyze** — regression and descriptive tables (LaTeX, Word, RTF)
+5. **Data provenance** — sample-identifiers + SHA256 hashes for raw and
+   derived files (the JAR Data and Code Sharing Policy artifacts)
 
-The included example uses an **earnings announcement event study** to
-demonstrate each step: it downloads quarterly fundamentals and daily stock
-returns, computes standardized unexpected earnings (SUE), and tests whether
-the market reacts more strongly to earnings changes when sales move in the
-same direction (SUE x SameSign interaction).
+The included example is an **earnings announcement event study**: it
+downloads quarterly fundamentals and daily stock returns, computes
+standardized unexpected earnings (SUE), and tests whether the market
+reacts more strongly to earnings changes when sales move in the same
+direction (SUE x SameSign interaction).
 
-For a pure R version of this template, see
-[project-template-r](https://github.com/eweisbrod/project-template-r).
 For more context on the pedagogical design, see the
 [parent project](https://github.com/eweisbrod/example-project).
 
+### Language combinations
+
+When `project_setup()` runs the first time, you'll be asked which
+combination you want. Pick from:
+
+| # | Combination | Use case |
+|---|---|---|
+| 1 | Full R | Single-language R project |
+| 2 | Full Python | Single-language Python project |
+| 3 | Python + R | Parallel figures / tables in both languages |
+| 4 | Python + Stata | Python pipeline, Stata tables |
+| 5 | R + Stata | R pipeline, Stata tables |
+| 6 | All three | Demo / cross-language comparison (default) |
+
+`project_setup()` in `utils.py` only offers Python-inclusive combos (2,
+3, 4, 6); the R version in `utils.R` only offers R-inclusive combos (1,
+3, 5, 6). Run `1-download-data.{R,py}` in whichever language you intend
+to keep — that determines which setup function fires and which combo
+options are available.
+
+After you confirm, the prompt offers to delete the files for the
+languages you didn't pick. You can decline if you want to keep them
+around for reference; otherwise your repo ends up containing exactly the
+scripts you'll use, in exactly the language(s) you chose.
+
 ## Quick Start
 
-1. Click **"Use this template"** on GitHub to create your own repo
-2. Clone your new repo
-3. Run setup:
-   ```bash
-   uv run src/setup.py
-   ```
-   This creates your `.env` file and stores WRDS credentials. (Requires
-   [uv](https://docs.astral.sh/uv/getting-started/installation/) to be
-   installed.)
-4. Run the pipeline:
-   ```bash
-   uv run src/1-download-data.py     # ~20 min (WRDS download)
-   uv run src/2-transform-data.py    # ~2 min
-   uv run src/3-figures.py           # or: Rscript src/3-figures.R
-   uv run src/4-analyze-data.py      # or: Rscript src/4-analyze-data.R
-                                     # or: stata -b do src/4-analyze-data.do
-   ```
+1. Click **"Use this template"** on GitHub to create your own repo, then
+   clone it.
+2. Open `src/1-download-data.R` in RStudio (or `src/1-download-data.py`
+   in VS Code) and run it interactively. The first call to
+   `project_setup()` at the top of the file will walk you through
+   first-time setup: pick a language combination, enter your data and
+   output directories, and store your WRDS credentials in your OS
+   keyring. Setup is finished once `.env` is on disk; from then on the
+   `project_setup()` call is an instant no-op on every subsequent run.
+3. Run the rest of the pipeline either step-by-step or via run-all:
+   - Python: `uv run src/run-all.py`
+   - R: open `src/run-all.R` in RStudio and run it (Ctrl+A, Ctrl+Enter)
 
 ## Project Structure
 
 ```
 your-project-name/
-├── .env.example            # Template for user's .env (copy and edit)
+├── .example-env            # Template for user's .env (copy and edit)
 ├── .gitignore              # Polyglot ignores (R + Python + Stata)
 ├── AGENTS.md               # AI assistant context (see below)
 ├── CLAUDE.md               # Claude Code config
@@ -104,18 +126,30 @@ Optional (for R or Stata scripts):
 ### Setting up `.env`
 
 Run `uv run src/setup.py` to create your `.env` file interactively. Or
-copy `.env.example` to `.env` and edit manually:
+copy `.example-env` to `.env` and edit manually:
 
 ```
-DATA_DIR=D:/Dropbox/your-project-name
-OUTPUT_DIR=D:/Dropbox/your-project-name/output
+RAW_DATA_DIR=D:/Dropbox/your-project-name/raw
+DATA_DIR=D:/Dropbox/your-project-name/derived
+OUTPUT_DIR=output
 ```
 
-- **`DATA_DIR`** — where raw and processed data files are stored (outside
-  the project folder, e.g., a shared Dropbox folder)
-- **`OUTPUT_DIR`** — where tables and figures are saved
-- Use **forward slashes** (`/`) even on Windows
-- The `.env` file is gitignored so each collaborator has their own copy
+- **`RAW_DATA_DIR`** — raw WRDS pulls (CCM link, CRSP stocknames, Compustat
+  fundq, CRSP daily returns, market index). These files are large and slow
+  to refresh, so the download script (`1-download-data.py`) skips any file
+  that already exists. Delete a file to force a re-pull. This split makes
+  re-runs and replications cheap and reproducible — a downstream user can
+  rerun scripts 2-4 against the original analyst's preserved raw inputs
+  without hitting WRDS.
+- **`DATA_DIR`** — derived files produced by scripts 2-4
+  (`regdata.parquet`, `regdata.dta`, `figure-data.parquet`,
+  `trading-dates.parquet`, `sample-selection.*`, `sample-identifiers.*`).
+  Safe to delete and regenerate.
+- **`OUTPUT_DIR`** — tables and figures, defaults to `output/`.
+- Use **forward slashes** (`/`) even on Windows.
+- `.env` is gitignored so each collaborator has their own copy.
+- `.env` files are strict KEY=VALUE — no `#` comments or blank-line
+  headers (env parsing tooling chokes on them).
 
 ### WRDS Credentials
 
@@ -135,6 +169,43 @@ ssc install projectpaths
 net install doenv, from("https://github.com/vikjam/doenv/raw/master/")
 project_paths_list, add project(project-template) path("C:/_git/project-template")
 ```
+
+## Logging and Reproducibility
+
+`src/run-all.py` runs the full pipeline (download → transform → figures →
+tables → provenance) and writes a per-script `.log` file for each step
+into `log/`:
+
+- `1-download-data.log`
+- `2-transform-data.log`
+- `3-figures.log`
+- `4-analyze-data.log`
+- `5-data-provenance.log`
+
+Each `.log` is plain text, command-echo + output interleaved — visually
+identical to a SAS or Stata log. Step 5 also exports
+`sample-identifiers.{parquet,csv}` (gvkey, permno, rdq, datadate, fyearq,
+fqtr) into `DATA_DIR`, and prints SHA256 hashes for every raw and
+derived file inside its own `.log`.
+
+Implementation: `batch_run()` in `src/utils.py` shells out to
+`run_with_echo.py`, a ~30-line AST-walking wrapper that prints each
+top-level statement before `exec()`-ing it. The R-only sister template
+([project-template-r](https://github.com/eweisbrod/project-template-r))
+uses an equivalent `batch_run()` that calls `R CMD BATCH`. SAS and
+Stata produce the same log shape natively, so the four pipeline
+languages emit visually consistent logs.
+
+The intent is to satisfy the Journal of Accounting Research Data and
+Code Sharing Policy, which expects (i) the code that converts raw data
+into the final dataset, (ii) a comprehensive log file documenting
+end-to-end execution, and (iii) identifiers of the final-sample
+observations.
+
+`batch_run()` is also useful for one-off pulls: write a small
+`pulls/<date>-<topic>.py`, then call
+`batch_run("pulls/<date>-<topic>.py")` from a Python shell. The sibling
+`.log` lands next to the script.
 
 ## Output
 

@@ -32,6 +32,9 @@ from utils import assign_ff12
 sys.stdout.reconfigure(encoding="utf-8")
 
 load_dotenv(".env", override=True)
+# RAW_DATA_DIR holds the raw WRDS pulls (read-only inputs).
+# DATA_DIR holds derived parquets we produce here.
+raw_data_dir = os.getenv("RAW_DATA_DIR")
 data_dir = os.getenv("DATA_DIR")
 output_dir = os.getenv("OUTPUT_DIR")
 
@@ -60,9 +63,9 @@ con = duckdb.connect()
 
 # read_parquet() in DuckDB SQL creates a lazy reference to the file.
 # No data is loaded yet.
-fundq_raw = f"read_parquet('{data_dir}/fundq-raw.parquet')"
-ccm_raw = f"read_parquet('{data_dir}/ccm-link.parquet')"
-stocknames_raw = f"read_parquet('{data_dir}/crsp-stocknames.parquet')"
+fundq_raw = f"read_parquet('{raw_data_dir}/fundq-raw.parquet')"
+ccm_raw = f"read_parquet('{raw_data_dir}/ccm-link.parquet')"
+stocknames_raw = f"read_parquet('{raw_data_dir}/crsp-stocknames.parquet')"
 
 
 # --- Define sample period ---
@@ -349,7 +352,7 @@ print(data4["sue"].quantile([0, 0.01, 0.25, 0.5, 0.75, 0.99, 1]))
 con = duckdb.connect()
 trading_dates = con.sql(f"""
     SELECT DISTINCT dlycaldt AS date
-    FROM read_parquet('{data_dir}/crsp-dsf-v2.parquet')
+    FROM read_parquet('{raw_data_dir}/crsp-dsf-v2.parquet')
     ORDER BY date
 """).pl()
 con.close()
@@ -411,9 +414,9 @@ crsp_rets = con.sql(f"""
            dsf.dlyret AS ret,
            idx.dlytotret AS vwretd
     FROM events AS ev
-    INNER JOIN read_parquet('{data_dir}/crsp-dsf-v2.parquet') AS dsf
+    INNER JOIN read_parquet('{raw_data_dir}/crsp-dsf-v2.parquet') AS dsf
       ON ev.permno = dsf.permno AND ev.date = dsf.dlycaldt
-    INNER JOIN read_parquet('{data_dir}/crsp-index.parquet') AS idx
+    INNER JOIN read_parquet('{raw_data_dir}/crsp-index.parquet') AS idx
       ON ev.date = idx.dlycaldt
 """).pl()
 

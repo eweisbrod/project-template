@@ -121,12 +121,17 @@ message("imported duplicate check function")
 
 
 
-# WRDS download function -------------------------------------------------------
+# Streaming download to parquet ------------------------------------------------
 
-# Downloads the result of a SQL query from WRDS to a local parquet file.
-# Uses a server-side cursor (via RPostgres) to stream rows in batches, writing
-# each batch to a single parquet file using arrow::ParquetFileWriter. This
-# ensures correct column types and keeps peak RAM bounded.
+# Streams a dbplyr lazy table (or DBI connection + query) to a local parquet
+# file via a server-side cursor. The function is database-agnostic — anything
+# that gives you a DBI connection works (WRDS PostgreSQL, BigQuery via the
+# bigrquery DBI driver, Snowflake via odbc, a local DuckDB, etc.). It used
+# to be called download_parquet(); the name was changed because the WRDS-specific
+# bit lives in your connection setup, not here.
+#
+# Each batch is written via arrow::ParquetFileWriter so column types are
+# preserved and peak RAM stays bounded.
 #
 # See 1-download-data.R for the raw version of this code (the Compustat fundq
 # download), which shows each step in detail. This function wraps that pattern
@@ -162,25 +167,42 @@ message("imported duplicate check function")
 #                 capped at 5M). Set explicitly to override.
 #   compression - parquet compression (default "zstd"; smaller files than
 #                 the arrow default of "snappy")
+#   skip_if_exists - if TRUE (default) and output_path already exists, skip
+#                    the download and return immediately. Delete the file to
+#                    force a re-download. This makes replication runs fast
+#                    and cheap on the WRDS side.
 #
-# Returns: invisible(total_rows) — the number of rows downloaded.
+# Returns: invisible(total_rows) — the number of rows downloaded, or 0 if
+#          the file already existed and was skipped.
 #
 # Examples:
 #   # Pipe a lazy tbl into the function (most common):
 #   tbl(wrds, in_schema("crsp", "dsf_v2")) |>
 #     filter(dlycaldt >= "1970-01-01") |>
 #     select(permno, dlycaldt, dlyret) |>
-#     download_wrds("data/crsp.parquet")
+#     download_parquet("data/crsp.parquet")
 #
 #   # Lower RAM target (e.g. 4 GB machine):
 #   tbl(wrds, in_schema("comp", "funda")) |>
-#     download_wrds("data/funda.parquet", max_ram_mb = 2000)
+#     download_parquet("data/funda.parquet", max_ram_mb = 2000)
 #
 #   # Explicit batch size (no cap applied):
-#   tbl(wrds, ...) |> download_wrds("out.parquet", batch_size = 500000)
+#   tbl(wrds, ...) |> download_parquet("out.parquet", batch_size = 500000)
 
-download_wrds <- function(tbl, output_path, max_ram_mb = 8000,
-                          batch_size = NULL, compression = "zstd") {
+download_parquet <- function(tbl, output_path, max_ram_mb = 8000,
+                          batch_size = NULL, compression = "zstd",
+                          skip_if_exists = TRUE) {
+
+  # Skip-if-exists: if the parquet is already on disk, don't re-pull.
+  # This is the JAR-replication-friendly default — a downstream user can
+  # re-run the pipeline without hitting WRDS, and the original analyst can
+  # delete a single file to refresh just that table.
+  if (skip_if_exists && file.exists(output_path)) {
+    size_mb <- file.size(output_path) / 1e6
+    message(sprintf("  Skipping download — file exists: %s (%.1f MB)",
+                    output_path, size_mb))
+    return(invisible(0L))
+  }
 
   # Extract connection and SQL from the lazy tbl. dbplyr::sql_render translates
   # the dplyr chain to SQL; remote_con returns the underlying DBI connection.
@@ -251,7 +273,265 @@ download_wrds <- function(tbl, output_path, max_ram_mb = 8000,
   invisible(total_rows)
 }
 
-message("imported WRDS download function")
+message("imported download_parquet function")
+
+
+# Run an R script via R CMD BATCH ----------------------------------------------
+
+# batch_run() is source()-with-a-receipt: it runs an R script in a fresh
+# child process via R CMD BATCH and writes the corresponding .Rout next to
+# the script. Use this for the JAR-grade per-script logs that pair with
+# SAS, Stata, and Python pipeline logs.
+#
+# Why a child process? R CMD BATCH spawns a clean R session, runs the file,
+# and writes a SAS-log-shaped record (R version banner at the top, every
+# command echoed with `> ` / `+ `, output interleaved, proc.time() at the
+# bottom). The format is the closest R analog to a SAS or Stata log.
+#
+# Why not just source(echo = TRUE)? Because source() runs in your current
+# session, which (a) inherits your existing variables and packages, and
+# (b) spreads sink()/output through your live console — fine for live work,
+# wrong for a posterity log. R CMD BATCH gets you isolation + the .Rout
+# format for free.
+#
+# Behavior:
+# - Default log_path is sibling .Rout (e.g. "pulls/foo.R" -> "pulls/foo.Rout"),
+#   matching R CMD BATCH's own default.
+# - vanilla = TRUE skips your .Rprofile / .Renviron so the run isn't polluted
+#   by user-specific state. Override with vanilla = FALSE if you have a
+#   project-level .Rprofile that the pipeline depends on.
+# - open = TRUE auto-opens the .Rout in your editor so you don't leave RStudio
+#   to read the log. Set FALSE for non-interactive callers (run-all.R, CI).
+# - Returns invisibly: list(status, log_path).
+#
+# Examples:
+#   # Interactive: write a one-off pull, then batch_run it.
+#   batch_run("pulls/2026-04-29-fundq-2020.R")
+#
+#   # In run-all: explicit log_path so output lands in a timestamped dir.
+#   batch_run("src/1-download-data.R",
+#             log_path = file.path(log_dir, "1-download-data.Rout"),
+#             open     = FALSE)
+
+batch_run <- function(file,
+                     log_path = NULL,
+                     vanilla  = TRUE,
+                     open     = TRUE) {
+
+  if (!file.exists(file)) {
+    stop("batch_run: script not found: ", file)
+  }
+
+  if (is.null(log_path)) {
+    log_path <- sub("\\.R$", ".Rout", file, ignore.case = TRUE)
+    if (log_path == file) log_path <- paste0(file, ".Rout")
+  }
+
+  args <- c("CMD", "BATCH")
+  if (vanilla) args <- c(args, "--vanilla")
+  args <- c(args, shQuote(file), shQuote(log_path))
+
+  status <- system2("R", args)
+
+  if (status == 0) {
+    message(sprintf("batch_run OK -> %s", log_path))
+  } else {
+    warning(sprintf("R CMD BATCH exited %d (see %s)", status, log_path))
+  }
+
+  if (open && interactive()) {
+    try(file.edit(log_path), silent = TRUE)
+  }
+
+  invisible(list(status = status, log_path = log_path))
+}
+
+message("imported batch_run function")
+
+
+# First-time project setup -----------------------------------------------------
+
+# project_setup() is an idempotent first-run helper. It's called at the top
+# of 1-download-data.R; on subsequent runs it sees .env on disk and returns
+# immediately. On the FIRST run (no .env yet) it prompts for:
+#   - language combination (R-inclusive only: 1, 3, 5, 6)
+#   - RAW_DATA_DIR, DATA_DIR, OUTPUT_DIR
+#   - WRDS keyring credentials
+#   - optional pruning of files for languages you didn't pick
+# and writes .env. The .env file's existence is the "have I been set up?"
+# flag — no separate state.
+#
+# Why is this in utils.R instead of a standalone setup.R script? readline()
+# has historically been finicky in source()'d scripts. Calling readline()
+# from a function in an interactive console works reliably. Wrapping the
+# whole onramp in one function keeps it out of script 1's main flow when
+# .env already exists.
+#
+# This function is R-only by design: it only offers language combos that
+# include R, so it can never end up deleting itself or the file that
+# called it. The Python sister `project_setup()` in utils.py mirrors this
+# rule with Python-inclusive combos.
+
+project_setup <- function(force = FALSE) {
+  if (!force && file.exists(".env")) {
+    return(invisible())
+  }
+
+  if (!interactive()) {
+    stop(
+      "project_setup: no .env file and R is not interactive.\n",
+      "  Open src/1-download-data.R in RStudio and run it interactively\n",
+      "  to walk through first-time setup, then any subsequent run\n",
+      "  (including run-all.R) will work.",
+      call. = FALSE
+    )
+  }
+
+  cat("\n=== First-time project setup ===\n\n")
+
+  combo  <- .ask_language_combo()
+  paths  <- .ask_paths()
+  .write_env(paths)
+  .ask_credentials()
+  .maybe_prune(combo)
+
+  cat("\nSetup complete. .env is on disk; future runs skip this prompt.\n\n")
+  invisible()
+}
+
+
+# --- project_setup helpers --------------------------------------------------
+
+# Combos that include R. Self-deletion is impossible because we never offer
+# a combo that excludes R from this function.
+.R_COMBOS <- list(
+  "1" = list(name = "Full R (no Python, no Stata)",
+             exts = c("R")),
+  "3" = list(name = "Python + R (parallel figures and tables)",
+             exts = c("R", "py")),
+  "5" = list(name = "R + Stata (R pipeline, Stata tables)",
+             exts = c("R", "do")),
+  "6" = list(name = "All three (R + Python + Stata; demo / comparison mode)",
+             exts = c("R", "py", "do"))
+)
+
+
+.ask_language_combo <- function() {
+  cat("Which language(s) will this project use?\n")
+  cat("  1. Full R\n")
+  cat("  3. Python + R\n")
+  cat("  5. R + Stata\n")
+  cat("  6. All three (default; useful for demos)\n\n")
+  choice <- trimws(readline(prompt = "Choice [6]: "))
+  if (!nzchar(choice)) choice <- "6"
+  if (is.null(.R_COMBOS[[choice]])) {
+    stop("Invalid choice ", choice, ". Pick 1, 3, 5, or 6.", call. = FALSE)
+  }
+  combo <- .R_COMBOS[[choice]]
+  cat("Selected: ", combo$name, "\n", sep = "")
+  combo
+}
+
+
+.ask_paths <- function() {
+  cat("\n--- Paths ---\n")
+  cat("Use forward slashes (/) on Windows. These should be OUTSIDE the\n")
+  cat("project folder (e.g. a Dropbox folder), since data is not committed.\n\n")
+  raw <- gsub("\\\\", "/",
+              trimws(readline(prompt = "RAW_DATA_DIR (raw WRDS pulls): ")))
+  derived <- gsub("\\\\", "/",
+                  trimws(readline(prompt = "DATA_DIR (derived parquets): ")))
+  output <- gsub("\\\\", "/",
+                 trimws(readline(prompt = "OUTPUT_DIR [output]: ")))
+  if (!nzchar(output)) output <- "output"
+  list(raw = raw, derived = derived, output = output)
+}
+
+
+.write_env <- function(paths) {
+  writeLines(
+    c(
+      paste0("RAW_DATA_DIR=", paths$raw),
+      paste0("DATA_DIR=",     paths$derived),
+      paste0("OUTPUT_DIR=",   paths$output)
+    ),
+    ".env"
+  )
+  for (d in c(paths$raw, paths$derived, paths$output)) {
+    if (!dir.exists(d)) {
+      dir.create(d, recursive = TRUE)
+      cat("Created ", d, "\n", sep = "")
+    }
+  }
+  cat(".env written\n")
+}
+
+
+.ask_credentials <- function() {
+  if (!requireNamespace("keyring", quietly = TRUE)) {
+    install.packages("keyring")
+  }
+  cat("\n--- WRDS credentials ---\n")
+  cat("Stored in your OS keyring (Windows Credential Manager / macOS\n")
+  cat("Keychain). Both R and Python read from the same entries.\n\n")
+  existing <- tryCatch(keyring::key_get("wrds", "username"),
+                       error = function(e) "")
+  if (nzchar(existing)) {
+    cat("Existing WRDS username: ", existing, "\n", sep = "")
+    if (tolower(trimws(readline("Update? (y/n) [n]: "))) != "y") {
+      return(invisible())
+    }
+  }
+  keyring::key_set("wrds", "username")
+  keyring::key_set("wrds", "password")
+}
+
+
+.NUMBERED <- c("1-download-data", "2-transform-data", "3-figures",
+               "4-analyze-data", "5-data-provenance")
+
+
+.maybe_prune <- function(combo) {
+  delete <- character()
+  for (stem in .NUMBERED) {
+    for (ext in c("py", "R", "do")) {
+      f <- file.path("src", paste0(stem, ".", ext))
+      if (file.exists(f) && !(ext %in% combo$exts)) {
+        delete <- c(delete, f)
+      }
+    }
+  }
+  if (!("py" %in% combo$exts)) {
+    for (f in c("src/utils.py", "src/run_with_echo.py", "src/run-all.py",
+                "pyproject.toml", "uv.lock", ".python-version")) {
+      if (file.exists(f)) delete <- c(delete, f)
+    }
+  }
+  if (!("do" %in% combo$exts)) {
+    f <- "src/4-analyze-data.do"
+    if (file.exists(f)) delete <- unique(c(delete, f))
+  }
+
+  if (length(delete) == 0L) {
+    cat("\nNo files to prune for this combo.\n")
+    return(invisible())
+  }
+
+  cat("\nThe following files are not needed for ", combo$name, ":\n", sep = "")
+  cat("  ", delete, sep = "\n  "); cat("\n\n")
+  if (tolower(trimws(readline("Delete them? (y/n) [n]: "))) != "y") {
+    cat("Skipped pruning. Files left in place.\n")
+    return(invisible())
+  }
+  for (f in delete) {
+    ok <- tryCatch(file.remove(f), error = function(e) FALSE)
+    cat(if (isTRUE(ok)) "  removed " else "  WARN could not delete ",
+        f, "\n", sep = "")
+  }
+}
+
+
+message("imported project_setup function")
 
 
 # Trading Days Function --------------------------------------------------------

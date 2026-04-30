@@ -1,0 +1,3 @@
+RAW_DATA_DIR=D:/Dropbox/your-project-name/raw
+DATA_DIR=D:/Dropbox/your-project-name/derived
+OUTPUT_DIR=output

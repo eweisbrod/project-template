@@ -107,3 +107,6 @@ log/
 *.dta
 *.sas7bdat
 *.csv
+
+# macOS
+.DS_Store

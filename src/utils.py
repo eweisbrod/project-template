@@ -3,7 +3,12 @@
 # Shared helper functions for the Python scripts.
 # ===========================================================================
 
+import getpass
+import re
+import subprocess
+import sys
 import time
+import webbrowser
 from pathlib import Path
 
 import polars as pl
@@ -107,15 +112,22 @@ def _normalize_arrow_schema(table: pa.Table) -> pa.Table:
     return table
 
 
-def download_wrds(
+def download_parquet(
     sql: str,
     output_path: str,
     connection,
     max_ram_mb: int = 8000,
     batch_size: int | None = None,
     compression: str = "zstd",
+    skip_if_exists: bool = True,
 ):
-    """Download a WRDS table to a local parquet file using chunked streaming.
+    """Stream a SQL result to a local parquet file via a server-side cursor.
+
+    Database-agnostic — anything that gives you a DBAPI 2.0 / psycopg2 cursor
+    will work (WRDS PostgreSQL, BigQuery via google-cloud-bigquery's DB-API,
+    Snowflake's connector, a local DuckDB connection, etc.). It used to be
+    called download_wrds(); the rename reflects that the WRDS-specific bit
+    lives in your connection setup, not in this function.
 
     Uses a server-side cursor to stream rows in batches and writes each batch
     to a parquet file via pyarrow's ParquetWriter. Peak memory = one batch.
@@ -140,7 +152,18 @@ def download_wrds(
         max_ram_mb: Target peak RAM in MB for auto batch sizing (default 8000).
         batch_size: Rows per batch. If None, auto-calculated from max_ram_mb.
         compression: Parquet compression codec (default "zstd").
+        skip_if_exists: If True (default) and output_path already exists, skip
+            the download and return. Delete the file to force a re-download.
+            Makes replication runs cheap on the WRDS side.
     """
+    # Skip-if-exists: don't re-pull a parquet that's already on disk. Lets a
+    # downstream user (or the original analyst) re-run the pipeline without
+    # hitting WRDS, and lets a single file be refreshed by deleting it.
+    if skip_if_exists and Path(output_path).exists():
+        size_mb = Path(output_path).stat().st_size / 1e6
+        print(f"  Skipping download — file exists: {output_path} ({size_mb:.1f} MB)")
+        return
+
     # Create a unique cursor name from the output filename to avoid collisions
     # if multiple downloads run in the same session.
     cursor_name = Path(output_path).stem.replace("-", "_")
@@ -205,3 +228,242 @@ def download_wrds(
     print()  # newline after progress
     size_mb = Path(output_path).stat().st_size / 1e6
     print(f"  Saved {total_rows:,} rows, {size_mb:.1f} MB")
+
+
+# Run a Python script via run_with_echo (batch_run) ---------------------------
+
+# batch_run() is the Python parallel of R's batch_run(): it runs a script
+# in a fresh child process and writes a sibling .log file containing every
+# top-level statement echoed (`>>> ` / `... ` continuations) with output
+# interleaved — the same SAS-log shape produced by R CMD BATCH and by SAS
+# / Stata's native log behavior.
+#
+# Why a child process? Each pipeline step gets a clean Python interpreter,
+# so a crash in one script doesn't poison the others, and the .log file
+# captures exactly what one script does, end-to-end. Matches how R CMD
+# BATCH works for R, and how `sas -sysin foo.sas` works for SAS.
+#
+# How it works: this function shells out to `uv run python run_with_echo.py
+# <script>` and pipes the resulting stdout/stderr into the .log file. The
+# AST-echo work happens inside run_with_echo.py — see that file for details.
+
+def batch_run(
+    script: str | Path,
+    log_path: str | Path | None = None,
+    open_: bool = True,
+) -> dict:
+    """Run a Python script via run_with_echo and capture its log.
+
+    Default log_path is sibling .log (e.g. "pulls/foo.py" -> "pulls/foo.log"),
+    matching R's batch_run() default and R CMD BATCH's own behavior.
+
+    Parameters
+    ----------
+    script : path to the .py file to run.
+    log_path : where to write the log. Defaults to script with .py replaced
+        by .log.
+    open_ : if True and an interactive context is available, open the log
+        in the system default editor when finished. Pass False from
+        non-interactive callers (run-all.py, CI).
+
+    Returns
+    -------
+    dict with keys 'returncode' and 'log_path'.
+    """
+    script = Path(script)
+    if not script.exists():
+        raise FileNotFoundError(f"batch_run: script not found: {script}")
+
+    if log_path is None:
+        log_path = re.sub(r"\.py$", ".log", str(script))
+        if log_path == str(script):
+            log_path = f"{script}.log"
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # run_with_echo.py is expected to live next to utils.py (in src/).
+    wrapper = Path(__file__).parent / "run_with_echo.py"
+
+    with log_path.open("w", encoding="utf-8") as f:
+        result = subprocess.run(
+            ["uv", "run", "python", str(wrapper), str(script)],
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+    if result.returncode == 0:
+        print(f"batch_run OK -> {log_path}")
+    else:
+        print(f"batch_run: subprocess exited {result.returncode} (see {log_path})",
+              file=sys.stderr)
+
+    if open_ and sys.stdin.isatty():
+        try:
+            webbrowser.open(log_path.resolve().as_uri())
+        except Exception:
+            pass
+
+    return {"returncode": result.returncode, "log_path": str(log_path)}
+
+
+# First-time project setup --------------------------------------------------
+
+# project_setup() is an idempotent first-run helper. It's called at the top
+# of 1-download-data.py; on subsequent runs it sees .env on disk and returns
+# immediately. On the FIRST run (no .env yet) it prompts for:
+#   - language combination (Python-inclusive only: 2, 3, 4, 6)
+#   - RAW_DATA_DIR, DATA_DIR, OUTPUT_DIR
+#   - WRDS keyring credentials
+#   - optional pruning of files for languages you didn't pick
+# and writes .env. The .env file's existence is the "have I been set up?"
+# flag — no separate state.
+#
+# This function is Python-only by design: it only offers language combos
+# that include Python, so it can never end up deleting itself or the file
+# that called it. The R sister `project_setup()` in utils.R mirrors this
+# rule with R-inclusive combos.
+
+# Combos that include Python.
+_PY_COMBOS = {
+    "2": ("Full Python (no R, no Stata)",      {"py"}),
+    "3": ("Python + R (parallel figures and tables)", {"py", "R"}),
+    "4": ("Python + Stata (Python pipeline, Stata tables)", {"py", "do"}),
+    "6": ("All three (R + Python + Stata; demo / comparison mode)",
+          {"py", "R", "do"}),
+}
+
+
+_NUMBERED = (
+    "1-download-data", "2-transform-data", "3-figures",
+    "4-analyze-data", "5-data-provenance",
+)
+
+
+def project_setup(force: bool = False) -> None:
+    """First-time setup: language combo, paths, credentials, prune.
+
+    Idempotent — returns immediately if `.env` exists. Pass force=True to
+    re-run. Run from an interactive Python console (or via uv run on a
+    script that calls it interactively).
+    """
+    if not force and Path(".env").exists():
+        return
+
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            "project_setup: no .env file and Python is not interactive.\n"
+            "  Run src/1-download-data.py interactively (e.g. via VS Code\n"
+            "  or `uv run python -i src/1-download-data.py`) to walk\n"
+            "  through first-time setup, then any subsequent run\n"
+            "  (including run-all.py) will work."
+        )
+
+    print("\n=== First-time project setup ===\n")
+    name, exts = _ask_language_combo()
+    paths      = _ask_paths()
+    _write_env(paths)
+    _ask_credentials()
+    _maybe_prune(name, exts)
+    print("\nSetup complete. .env is on disk; future runs skip this prompt.\n")
+
+
+def _ask_language_combo() -> tuple[str, set[str]]:
+    print("Which language(s) will this project use?")
+    print("  2. Full Python")
+    print("  3. Python + R")
+    print("  4. Python + Stata")
+    print("  6. All three (default; useful for demos)")
+    print()
+    choice = input("Choice [6]: ").strip() or "6"
+    if choice not in _PY_COMBOS:
+        raise SystemExit(f"Invalid choice {choice!r}. Pick 2, 3, 4, or 6.")
+    name, exts = _PY_COMBOS[choice]
+    print(f"Selected: {name}")
+    return name, exts
+
+
+def _ask_paths() -> dict[str, str]:
+    print("\n--- Paths ---")
+    print("Use forward slashes (/) on Windows. These should be OUTSIDE the")
+    print("project folder (e.g. a Dropbox folder), since data is not committed.")
+    print()
+    raw     = input("RAW_DATA_DIR (raw WRDS pulls): ").strip().replace("\\", "/")
+    derived = input("DATA_DIR (derived parquets):   ").strip().replace("\\", "/")
+    output  = input("OUTPUT_DIR [output]:           ").strip().replace("\\", "/")
+    if not output:
+        output = "output"
+    return {"raw": raw, "derived": derived, "output": output}
+
+
+def _write_env(paths: dict[str, str]) -> None:
+    Path(".env").write_text(
+        f"RAW_DATA_DIR={paths['raw']}\n"
+        f"DATA_DIR={paths['derived']}\n"
+        f"OUTPUT_DIR={paths['output']}\n",
+        encoding="utf-8",
+    )
+    for d in paths.values():
+        Path(d).mkdir(parents=True, exist_ok=True)
+        print(f"  ready: {d}")
+    print(".env written")
+
+
+def _ask_credentials() -> None:
+    try:
+        import keyring
+    except ImportError:
+        print("WARNING: keyring not installed; skipping WRDS credential setup.")
+        return
+    print("\n--- WRDS credentials ---")
+    print("Stored in your OS keyring (Windows Credential Manager / macOS")
+    print("Keychain). Both R and Python read from the same entries.")
+    print()
+    existing = keyring.get_password("wrds", "username") or ""
+    if existing:
+        print(f"Existing WRDS username: {existing}")
+        if input("Update? (y/n) [n]: ").strip().lower() != "y":
+            return
+    user = input("WRDS username: ").strip()
+    pw   = getpass.getpass("WRDS password (input hidden): ")
+    keyring.set_password("wrds", "username", user)
+    keyring.set_password("wrds", "password", pw)
+    print(f"Stored credentials for {user}.")
+
+
+def _maybe_prune(combo_name: str, exts: set[str]) -> None:
+    delete: list[Path] = []
+    src = Path("src")
+    for stem in _NUMBERED:
+        for e in ("py", "R", "do"):
+            f = src / f"{stem}.{e}"
+            if f.exists() and e not in exts:
+                delete.append(f)
+
+    if "R" not in exts:
+        for p in (src / "utils.R", src / "run-all.R"):
+            if p.exists():
+                delete.append(p)
+    if "do" not in exts:
+        f = src / "4-analyze-data.do"
+        if f.exists() and f not in delete:
+            delete.append(f)
+
+    if not delete:
+        print("\nNo files to prune for this combo.")
+        return
+
+    print(f"\nThe following files are not needed for {combo_name}:")
+    for f in delete:
+        print(f"  {f}")
+    print()
+    if input("Delete them? (y/n) [n]: ").strip().lower() != "y":
+        print("Skipped pruning. Files left in place.")
+        return
+    for f in delete:
+        try:
+            f.unlink()
+        except OSError as e:
+            print(f"  WARN could not delete {f}: {e}")
+        else:
+            print(f"  removed {f}")

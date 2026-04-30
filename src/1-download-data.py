@@ -43,16 +43,22 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from dotenv import load_dotenv
 
-# Load paths from the .env file. Each user has their own .env pointing to
-# their local data and output directories (see .env.example).
-# override=True ensures the .env file wins over any system-level environment
-# variables with the same name (e.g., DATA_DIR set from another project).
+# Helpers from utils.py (download_parquet, batch_run, project_setup, ...).
+from utils import download_parquet, project_setup
+
+# First-time setup: prompts for paths, language combo, and WRDS credentials,
+# then writes .env. Idempotent — instant no-op if .env already exists. The
+# .env file's existence is the "have I been set up?" flag, no separate
+# state needed.
+project_setup()
+
+# Load paths from .env (which project_setup() has just created or was
+# already there). override=True ensures the .env file wins over any
+# system-level environment variables with the same name.
 load_dotenv(".env", override=True)
+raw_data_dir = os.getenv("RAW_DATA_DIR")
 data_dir = os.getenv("DATA_DIR")
 output_dir = os.getenv("OUTPUT_DIR")
-
-# Import the download_wrds() helper from utils.py.
-from utils import download_wrds
 
 
 # Connect to WRDS --------------------------------------------------------------
@@ -91,19 +97,28 @@ print(f"Connected to WRDS: {wrds.info.host}:{wrds.info.port}")
 # polars.read_database() sends a SQL query to the database and returns the
 # full result as a polars DataFrame. This is the simplest download method —
 # fine when the table fits comfortably in RAM.
+#
+# The skip-if-exists guard around the download block means a replication run
+# (or re-running this script) won't re-pull the file unless you delete it
+# first. Matches the JAR data policy expectation that raw inputs are
+# preserved verbatim from the analyst's original pull.
 
-start = time.time()
+ccm_path = f"{raw_data_dir}/ccm-link.parquet"
 
-ccm_link = pl.read_database(
-    "SELECT * FROM crsp.ccmxpf_lnkhist",
-    connection=wrds,
-)
+if Path(ccm_path).exists():
+    print(f"Skipping CCM link download — file exists: {ccm_path}")
+else:
+    start = time.time()
 
-print(f"CCM link: {ccm_link.shape[0]:,} rows, {time.time() - start:.1f}s")
-print(ccm_link.head())
+    ccm_link = pl.read_database(
+        "SELECT * FROM crsp.ccmxpf_lnkhist",
+        connection=wrds,
+    )
 
-# polars writes parquet natively via Arrow — no conversion needed.
-ccm_link.write_parquet(f"{data_dir}/ccm-link.parquet")
+    print(f"CCM link: {ccm_link.shape[0]:,} rows, {time.time() - start:.1f}s")
+    print(ccm_link.head())
+
+    ccm_link.write_parquet(ccm_path)
 
 
 # Download CRSP stocknames_v2 --------------------------------------------------
@@ -111,16 +126,21 @@ ccm_link.write_parquet(f"{data_dir}/ccm-link.parquet")
 # This table provides time-varying SIC codes by permno and date range.
 # Small table, so polars.read_database() is fine.
 
-start = time.time()
+stocknames_path = f"{raw_data_dir}/crsp-stocknames.parquet"
 
-stocknames = pl.read_database(
-    "SELECT permno, namedt, nameenddt, siccd FROM crsp.stocknames_v2",
-    connection=wrds,
-)
+if Path(stocknames_path).exists():
+    print(f"Skipping stocknames download — file exists: {stocknames_path}")
+else:
+    start = time.time()
 
-print(f"Stocknames: {stocknames.shape[0]:,} rows, {time.time() - start:.1f}s")
+    stocknames = pl.read_database(
+        "SELECT permno, namedt, nameenddt, siccd FROM crsp.stocknames_v2",
+        connection=wrds,
+    )
 
-stocknames.write_parquet(f"{data_dir}/crsp-stocknames.parquet")
+    print(f"Stocknames: {stocknames.shape[0]:,} rows, {time.time() - start:.1f}s")
+
+    stocknames.write_parquet(stocknames_path)
 
 
 # Download Compustat fundq (CHUNKED DOWNLOAD APPROACH) -------------------------
@@ -139,12 +159,14 @@ stocknames.write_parquet(f"{data_dir}/crsp-stocknames.parquet")
 #   - Peak memory = one batch, not the full table.
 #
 # FIRST I DEMONSTRATE THIS APPROACH with all the details visible. After this,
-# we use the download_wrds() wrapper from utils.py which does the same thing
+# we use the download_parquet() wrapper from utils.py which does the same thing
 # but hides the boilerplate.
 
 BATCH_SIZE = 50_000
 
-fundq_path = f"{data_dir}/fundq-raw.parquet"
+# Goes to RAW_DATA_DIR — raw inputs live separately from the derived parquets
+# scripts 2-4 produce.
+fundq_path = f"{raw_data_dir}/fundq-raw.parquet"
 
 # We send raw SQL to WRDS with standard Compustat filters applied server-side
 # to reduce the download size. Depending on your needs, you might download
@@ -160,75 +182,80 @@ fundq_sql = """
       AND rdq IS NOT NULL
 """
 
-start = time.time()
+# Skip-if-exists guard: don't re-pull fundq if it's already on disk.
+# Delete the file to force a re-download.
+if Path(fundq_path).exists():
+    print(f"Skipping fundq download — file exists: {fundq_path}")
+else:
+    start = time.time()
 
-# Open a server-side cursor on WRDS. No data is transferred yet — the
-# database holds the query plan ready to stream results when we ask.
-cursor = wrds.cursor(name="fundq_download")
-cursor.execute(fundq_sql)
+    # Open a server-side cursor on WRDS. No data is transferred yet — the
+    # database holds the query plan ready to stream results when we ask.
+    cursor = wrds.cursor(name="fundq_download")
+    cursor.execute(fundq_sql)
 
-# We'll create the ParquetWriter on the first batch (we need its schema first).
-writer = None
-total_rows = 0
+    # We'll create the ParquetWriter on the first batch (we need its schema first).
+    writer = None
+    total_rows = 0
 
-# Loop: fetch batches until the server has no more rows.
-while True:
-    # Pull the next BATCH_SIZE rows. Returns a list of tuples (one per row).
-    rows = cursor.fetchmany(BATCH_SIZE)
-    if not rows:
-        break
+    # Loop: fetch batches until the server has no more rows.
+    while True:
+        # Pull the next BATCH_SIZE rows. Returns a list of tuples (one per row).
+        rows = cursor.fetchmany(BATCH_SIZE)
+        if not rows:
+            break
 
-    total_rows += len(rows)
+        total_rows += len(rows)
+        elapsed = time.time() - start
+        size_mb = Path(fundq_path).stat().st_size / 1e6 if Path(fundq_path).exists() else 0
+        print(
+            f"\r  {total_rows:,} rows | {elapsed / 60:.1f} min | "
+            f"~{size_mb:.0f} MB on disk",
+            end="",
+        )
+
+        # Convert the list of tuples to a pyarrow Table.
+        # cursor.description gives us the column names from the SQL result.
+        col_names = [desc[0] for desc in cursor.description]
+        # Transpose rows (list of tuples) into columns (dict of lists)
+        col_data = {col: [row[i] for row in rows] for i, col in enumerate(col_names)}
+        table = pa.Table.from_pydict(col_data)
+
+        # Cast DECIMAL columns to float64. PostgreSQL NUMERIC precision can vary
+        # between batches (e.g., decimal128(9,4) then decimal128(8,4)), which
+        # causes a schema mismatch error in the ParquetWriter. Casting to float64
+        # is standard for financial data and avoids this issue.
+        new_schema = pa.schema([
+            pa.field(f.name, pa.float64()) if pa.types.is_decimal(f.type) else f
+            for f in table.schema
+        ])
+        table = table.cast(new_schema)
+
+        # First batch: create the ParquetWriter using the batch's schema.
+        # We use zstd compression — good ratio, fast to read back.
+        if writer is None:
+            writer = pq.ParquetWriter(fundq_path, table.schema, compression="zstd")
+
+        # Append this batch to the parquet file as a new row group.
+        writer.write_table(table)
+
+    # Finalize the parquet file (writes footer metadata — required for valid file).
+    if writer is not None:
+        writer.close()
+
+    # Close the server-side cursor to free resources on WRDS.
+    cursor.close()
+
+    print()  # newline after progress line
     elapsed = time.time() - start
-    size_mb = Path(fundq_path).stat().st_size / 1e6 if Path(fundq_path).exists() else 0
-    print(
-        f"\r  {total_rows:,} rows | {elapsed / 60:.1f} min | "
-        f"~{size_mb:.0f} MB on disk",
-        end="",
-    )
-
-    # Convert the list of tuples to a pyarrow Table.
-    # cursor.description gives us the column names from the SQL result.
-    col_names = [desc[0] for desc in cursor.description]
-    # Transpose rows (list of tuples) into columns (dict of lists)
-    col_data = {col: [row[i] for row in rows] for i, col in enumerate(col_names)}
-    table = pa.Table.from_pydict(col_data)
-
-    # Cast DECIMAL columns to float64. PostgreSQL NUMERIC precision can vary
-    # between batches (e.g., decimal128(9,4) then decimal128(8,4)), which
-    # causes a schema mismatch error in the ParquetWriter. Casting to float64
-    # is standard for financial data and avoids this issue.
-    new_schema = pa.schema([
-        pa.field(f.name, pa.float64()) if pa.types.is_decimal(f.type) else f
-        for f in table.schema
-    ])
-    table = table.cast(new_schema)
-
-    # First batch: create the ParquetWriter using the batch's schema.
-    # We use zstd compression — good ratio, fast to read back.
-    if writer is None:
-        writer = pq.ParquetWriter(fundq_path, table.schema, compression="zstd")
-
-    # Append this batch to the parquet file as a new row group.
-    writer.write_table(table)
-
-# Finalize the parquet file (writes footer metadata — required for valid file).
-if writer is not None:
-    writer.close()
-
-# Close the server-side cursor to free resources on WRDS.
-cursor.close()
-
-print()  # newline after progress line
-elapsed = time.time() - start
-print(f"Saved {total_rows:,} rows, {Path(fundq_path).stat().st_size / 1e6:.1f} MB, {elapsed:.0f}s")
+    print(f"Saved {total_rows:,} rows, {Path(fundq_path).stat().st_size / 1e6:.1f} MB, {elapsed:.0f}s")
 
 
-# Download CRSP daily returns (download_wrds wrapper) --------------------------
+# Download CRSP daily returns (download_parquet wrapper) --------------------------
 
 # CRSP daily stock file (v2) is the largest table — about 100M rows.
 # Now that you've seen the raw chunked loop above (for fundq), here we use
-# download_wrds() from utils.py. It does the same thing — server-side cursor
+# download_parquet() from utils.py. It does the same thing — server-side cursor
 # + fetchmany + ParquetWriter — but handles the boilerplate for you.
 #
 # CRSP v2 column names:
@@ -238,11 +265,13 @@ print(f"Saved {total_rows:,} rows, {Path(fundq_path).stat().st_size / 1e6:.1f} M
 
 print("\nDownloading CRSP daily returns (this will take 10-15+ minutes)...")
 
+# download_parquet() defaults to skip_if_exists=True, so re-running this script
+# does not re-pull tables that are already on disk.
 start = time.time()
 
-download_wrds(
+download_parquet(
     sql="SELECT permno, dlycaldt, dlyret FROM crsp.dsf_v2 WHERE dlycaldt >= '1970-01-01'",
-    output_path=f"{data_dir}/crsp-dsf-v2.parquet",
+    output_path=f"{raw_data_dir}/crsp-dsf-v2.parquet",
     connection=wrds,
 )
 
@@ -256,12 +285,12 @@ print(f"  {time.time() - start:.0f}s total")
 
 start = time.time()
 
-download_wrds(
+download_parquet(
     sql="""SELECT dlycaldt, dlytotret
            FROM crsp.inddlyseriesdata
            WHERE indno = 1000200
              AND dlycaldt >= '1970-01-01'""",
-    output_path=f"{data_dir}/crsp-index.parquet",
+    output_path=f"{raw_data_dir}/crsp-index.parquet",
     connection=wrds,
 )
 
@@ -272,7 +301,7 @@ print(f"  {time.time() - start:.0f}s total")
 
 wrds.close()
 
-print("\nDone. Parquet files saved to:", data_dir)
+print("\nDone. Parquet files saved to:", raw_data_dir)
 print("  ccm-link.parquet         — CCM link table (gvkey -> permno)")
 print("  crsp-stocknames.parquet  — CRSP SIC codes by permno + date range")
 print("  fundq-raw.parquet        — Compustat quarterly fundamentals")

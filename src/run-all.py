@@ -1,175 +1,82 @@
-# run-all.py — Run the full pipeline with logging
-# ===========================================================================
+# run-all.py — Run the full pipeline; each script writes its own .log
+# ============================================================================
 # HOW TO RUN:
 #   uv run src/run-all.py
 #
-# A log file will be created in the log/ folder capturing all console output.
+# Each numbered script is executed via batch_run() (utils.py), which spawns
+# a fresh Python subprocess via run_with_echo.py and writes a sibling .log
+# capturing:
+#   - "Started: ..." timestamp at the top.
+#   - Every top-level statement echoed with `>>> ` / `... ` continuations.
+#   - print() output interleaved with the statements.
+#   - Warnings written to stderr captured into the same log.
 #
-# This master script:
-#   1. Starts a log file
-#   2. Runs scripts 1-4 in order (Python versions)
-#   3. Exports sample identifiers (gvkey, permno, rdq) for replication
-#   4. Prints data provenance (file dates, sizes)
-#   5. Closes the log
+# The five .log files (1-download, 2-transform, 3-figures, 4-analyze,
+# 5-provenance) for one pipeline run land in log/<script>.log. A fresh
+# run overwrites the previous run's logs — the file mtime and the
+# "Started:" line inside each script tell you when it was produced.
+# Together they are the JAR Data and Code Sharing Policy artifacts:
+#   1. The .py files (committed) are the code that produced the results.
+#   2. The .log files are the comprehensive logs of execution.
+#   3. 5-data-provenance.py writes sample-identifiers.{parquet,csv} into
+#      DATA_DIR — the regression-sample row identifiers.
 #
-# JAR Data Policy notes:
-#   The Journal of Accounting Research requires authors to provide:
-#   - Code that converts raw data into final datasets and produces tables
-#   - A comprehensive log file showing the execution of the entire code
-#   - Identifiers (e.g., gvkey, permno) for the final sample
-#   This master script and its output satisfy those requirements.
-# ===========================================================================
+# This script does NOT capture its own output — the per-script .log files
+# ARE the logs; the orchestration here is just "call the next batch_run."
+#
+# The R-only sister template (project-template-r) uses an equivalent
+# batch_run() that calls R CMD BATCH instead of run_with_echo.py. SAS and
+# Stata produce the same SAS-log shape natively. All four pipeline
+# languages emit visually consistent per-script logs.
+# ============================================================================
 
 import os
 import sys
-import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 
-import polars as pl
 from dotenv import load_dotenv
+
+from utils import batch_run
 
 sys.stdout.reconfigure(encoding="utf-8")
 
 
-class TeeLogger:
-    """Write to both a log file and the console simultaneously."""
-
-    def __init__(self, log_path: str):
-        self.log_file = open(log_path, "w", encoding="utf-8")
-        self.console = sys.__stdout__
-
-    def write(self, text):
-        self.console.write(text)
-        self.log_file.write(text)
-        self.log_file.flush()
-
-    def flush(self):
-        self.console.flush()
-        self.log_file.flush()
-
-    def close(self):
-        self.log_file.close()
-
-
-def run_script(script_path: str, logger):
-    """Run a Python script as a subprocess, streaming output to the logger."""
-    print(f"\n{'=' * 70}")
-    print(f"Running: {script_path}")
-    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'=' * 70}\n")
-
-    result = subprocess.run(
-        ["uv", "run", "python", script_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-    # Write the script's output to our log
-    print(result.stdout)
-
-    if result.returncode != 0:
-        print(f"ERROR: {script_path} exited with code {result.returncode}")
-        sys.exit(result.returncode)
-
-    print(f"Finished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-
-def main():
-    # --- Start logging ---
-    os.makedirs("log", exist_ok=True)
-    log_file = f"log/run-all-{datetime.now().strftime('%Y-%m-%d')}.log"
-    logger = TeeLogger(log_file)
-    sys.stdout = logger
-
-    print(f"Pipeline started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Python version: {sys.version}")
-    print(f"Working directory: {os.getcwd()}")
-
+def main() -> None:
     # --- Load environment ---
     load_dotenv(".env", override=True)
-    data_dir = os.getenv("DATA_DIR")
-    output_dir = os.getenv("OUTPUT_DIR")
-    print(f"DATA_DIR: {data_dir}")
-    print(f"OUTPUT_DIR: {output_dir}")
+    raw_data_dir = os.getenv("RAW_DATA_DIR")
+    data_dir     = os.getenv("DATA_DIR")
+    output_dir   = os.getenv("OUTPUT_DIR")
+    print(f"RAW_DATA_DIR: {raw_data_dir}")
+    print(f"DATA_DIR:     {data_dir}")
+    print(f"OUTPUT_DIR:   {output_dir}")
 
-    # --- Run scripts 1-4 ---
+    # --- Steps 1-5 via batch_run() ---
+    # open_=False so we don't pop up an editor for every script in the run.
+    # Logs go to log/<script>.log — a fresh run overwrites the previous run.
+    log_dir = Path("log")
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     start_all = time.time()
-
-    run_script("src/1-download-data.py", logger)
-    run_script("src/2-transform-data.py", logger)
-    run_script("src/3-figures.py", logger)
-    run_script("src/4-analyze-data.py", logger)
-
-    # --- Export sample identifiers ---
-
-    print(f"\n{'=' * 70}")
-    print("Exporting sample identifiers")
-    print(f"{'=' * 70}\n")
-
-    # JAR requires "whenever feasible, authors should provide the identifiers
-    # (e.g., CIK, CUSIP) of all the observations that make up the final sample."
-    regdata = pl.read_parquet(f"{data_dir}/regdata.parquet")
-
-    sample_ids = (regdata
-        .select("gvkey", "permno", "rdq", "datadate", "fyearq", "fqtr")
-        .sort("gvkey", "rdq")
-    )
-
-    sample_ids.write_parquet(f"{data_dir}/sample-identifiers.parquet")
-    sample_ids.to_pandas().to_csv(f"{data_dir}/sample-identifiers.csv", index=False)
-
-    print(f"Sample identifiers: {sample_ids.shape[0]:,} rows")
-    print(f"Distinct gvkeys: {sample_ids['gvkey'].n_unique():,}")
-    rdq_range = sample_ids["rdq"]
-    print(f"RDQ range: {rdq_range.min()} to {rdq_range.max()}")
-
-    # --- Data provenance ---
-
-    print(f"\n{'=' * 70}")
-    print("Data provenance")
-    print(f"{'=' * 70}\n")
-
-    raw_files = ["ccm-link.parquet", "crsp-stocknames.parquet",
-                 "fundq-raw.parquet", "crsp-dsf-v2.parquet", "crsp-index.parquet"]
-
-    derived_files = ["regdata.parquet", "regdata.dta", "figure-data.parquet",
-                     "trading-dates.parquet", "sample-identifiers.parquet",
-                     "sample-selection.parquet"]
-
-    def print_file_info(files, directory):
-        for f in files:
-            path = Path(directory) / f
-            if path.exists():
-                stat = path.stat()
-                mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
-                size_mb = stat.st_size / 1e6
-                print(f"  {f:<40s}  {mtime}  {size_mb:.1f} MB")
-
-    print("Raw data files (downloaded from WRDS):")
-    print_file_info(raw_files, data_dir)
-
-    print("\nDerived data files:")
-    print_file_info(derived_files, data_dir)
-
-    print("\nOutput files (tables and figures):")
-    out_files = [f.name for f in Path(output_dir).iterdir()
-                 if f.suffix in (".tex", ".pdf", ".png", ".docx", ".rtf")]
-    print_file_info(sorted(out_files), output_dir)
+    scripts = [
+        "src/1-download-data.py",
+        "src/2-transform-data.py",
+        "src/3-figures.py",
+        "src/4-analyze-data.py",
+        "src/5-data-provenance.py",
+    ]
+    for script in scripts:
+        log_path = log_dir / Path(script).with_suffix(".log").name
+        result = batch_run(script, log_path=log_path, open_=False)
+        if result["returncode"] != 0:
+            print(f"ABORT: {script} exited {result['returncode']}; "
+                  f"see {log_path}", file=sys.stderr)
+            sys.exit(result["returncode"])
 
     elapsed = time.time() - start_all
-    print(f"\nPipeline finished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Total elapsed: {elapsed / 60:.1f} minutes")
-
-    # --- Stop logging ---
-    sys.stdout = logger.console
-    logger.close()
-    print(f"Log saved to: {log_file}")
+    print(f"\nPipeline complete in {elapsed/60:.1f} min. Logs in: log/")
 
 
 if __name__ == "__main__":

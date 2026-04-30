@@ -9,30 +9,45 @@
 
 ## Project Overview
 
-This is a **polyglot project template** (Python + R + Stata) for
-Accounting/Finance empirical research. It demonstrates an earnings
-announcement event study: downloading data from WRDS (Compustat quarterly +
-CRSP daily), merging databases, computing earnings surprises and abnormal
-returns, producing publication-ready figures, and outputting formatted
-tables to LaTeX, MS Word, and RTF.
+This is a **swiss-army-knife project template** for Accounting/Finance
+empirical research. The repository ships with full R, full Python, and
+Stata implementations of every numbered pipeline step. The first time
+`1-download-data.R` or `1-download-data.py` is run, `project_setup()`
+(defined in the corresponding `utils.{R,py}`) prompts the user for a
+language combination, paths, and WRDS credentials, then writes `.env`
+and (optionally) prunes the files for the languages that weren't
+picked. Six combos are supported: Full R, Full Python, Python + R,
+Python + Stata, R + Stata, and All three (demo mode). The R
+`project_setup()` only offers R-inclusive combos and the Python one
+only offers Python-inclusive, so neither version ever deletes itself
+or the file that called it.
 
-Scripts 1-2 (download + transform) are **Python only**. Scripts 3-4
-(figures + analysis) have **parallel implementations** in Python, R, and
-Stata. All languages share the same data files (parquet for Python/R, .dta
-for Stata) and the same `.env` configuration.
+The `.env` file's existence is the "setup is done" flag —
+`project_setup()` short-circuits to a no-op on every subsequent run.
+There is no separate setup script to run; setup is just a function call
+at the top of script 1.
 
-For a pure R version, see
-[project-template-r](https://github.com/eweisbrod/project-template-r).
+The example pipeline is an earnings announcement event study: download
+data from WRDS (Compustat quarterly + CRSP daily), merge databases,
+compute earnings surprises and abnormal returns, produce publication-
+ready figures, and output formatted tables to LaTeX, MS Word, and RTF.
+
+Numbered scripts (1–5) exist in **all three languages in parallel**:
+`1-download-data.{R,py}`, `2-transform-data.{R,py}`, `3-figures.{R,py}`,
+`4-analyze-data.{R,py,do}`, `5-data-provenance.{R,py}`. Languages share
+the same data layer (parquet for Python/R, .dta for Stata) and the same
+`.env` configuration.
 
 **This is a public teaching repository.** Code quality, readability, and
-extensive comments matter more than efficiency. When making changes, preserve
-the teaching style and add comments explaining *why*, not just *what*.
+extensive comments matter more than efficiency. When making changes,
+preserve the teaching style and add comments explaining *why*, not just
+*what*.
 
 ## Project Structure
 
 ```
 project-template/
-├── .env.example            # Template for user's .env
+├── .example-env            # Template for user's .env (copy to .env, fill in)
 ├── .gitignore              # Polyglot ignores (R + Python + Stata)
 ├── AGENTS.md               # This file
 ├── CLAUDE.md               # Claude Code config (imports AGENTS.md)
@@ -40,28 +55,42 @@ project-template/
 ├── pyproject.toml          # Python dependencies (managed by uv)
 ├── output/                 # Tables and figures (gitignored contents)
 ├── src/
-│   ├── setup.py                      # One-time setup (creates .env, stores creds)
-│   ├── utils.py                      # Python helpers (download_wrds, FF12)
-│   ├── utils.R                       # R helpers (winsorize, FF industries, etc.)
+│   ├── utils.py                      # Python helpers (download_parquet, batch_run, project_setup, FF12)
+│   ├── utils.R                       # R helpers (winsorize, FF industries, batch_run, project_setup)
+│   ├── run_with_echo.py              # AST-echo wrapper batch_run() shells out to
 │   │
-│   ├── 1-download-data.py            # Download from WRDS (Python only)
-│   ├── 2-transform-data.py           # Merge + variables + BHARs (Python only)
+│   ├── 1-download-data.py            # Download from WRDS (Python)
+│   ├── 1-download-data.R             # Download from WRDS (R)
+│   ├── 2-transform-data.py           # Merge + variables + BHARs (Python)
+│   ├── 2-transform-data.R            # Merge + variables + BHARs (R)
 │   │
 │   ├── 3-figures.py                  # Figures (plotnine)
 │   ├── 3-figures.R                   # Figures (ggplot2)
 │   │
 │   ├── 4-analyze-data.py             # Tables (pyfixest, LaTeX)
 │   ├── 4-analyze-data.R              # Tables (fixest/modelsummary, LaTeX + Word)
-│   └── 4-analyze-data.do             # Tables (reghdfe/esttab, LaTeX + RTF)
+│   ├── 4-analyze-data.do             # Tables (reghdfe/esttab, LaTeX + RTF)
+│   ├── 5-data-provenance.py          # Sample IDs + file SHA256 (Python)
+│   ├── 5-data-provenance.R           # Sample IDs + file SHA256 (R)
+│   ├── run-all.py                    # Master: batch_run() each script (Python)
+│   └── run-all.R                     # Master: batch_run() each script (R)
 └── LICENSE
 ```
 
+After running `setup.{py,R}` and choosing a language combo, the file list
+above will be pruned to whichever languages were kept.
+
 ### Script Execution Order
 
-1. `1-download-data.py` (requires WRDS credentials, ~20 min)
-2. `2-transform-data.py` (~2 min)
-3. `3-figures.py` or `3-figures.R` (pick one)
-4. `4-analyze-data.py` or `4-analyze-data.R` or `4-analyze-data.do` (pick one)
+Scripts are numbered and should be run in order. Each numbered step has
+parallel implementations in the chosen languages — pick whichever your
+combo kept (or run `run-all.{py,R}` to do all five steps in sequence).
+
+1. `1-download-data.{py,R}` (requires WRDS credentials, ~20 min)
+2. `2-transform-data.{py,R}` (~2 min)
+3. `3-figures.{py,R}`
+4. `4-analyze-data.{py,R,do}`
+5. `5-data-provenance.{py,R}` (sample-identifiers + file hashes)
 
 Run Python scripts with `uv run src/script.py`. R scripts with
 `Rscript src/script.R`. Stata scripts with `do src/4-analyze-data.do`.
@@ -71,14 +100,25 @@ Run Python scripts with `uv run src/script.py`. R scripts with
 ### Environment and Paths
 
 - **All paths come from the `.env` file.** Never hardcode local paths.
-- Run `uv run src/setup.py` to create `.env` and store WRDS credentials.
-- The `.env` file uses **forward slashes** even on Windows:
-  `DATA_DIR=D:/Dropbox/your-project-name`
-- Two key variables: `DATA_DIR` (raw/processed data) and `OUTPUT_DIR`
-  (tables and figures).
-- Python: `load_dotenv(".env", override=True); data_dir = os.getenv("DATA_DIR")`
-- R: `load_dot_env(".env"); data_dir <- Sys.getenv("DATA_DIR")`
-- Stata: `doenv using ".env"; local data_dir "\`r(DATA_DIR)'"`
+- Run `uv run src/setup.py` to create `.env` (or copy `.example-env` and
+  edit by hand) and to store WRDS credentials in the OS keyring.
+- The `.env` file uses **forward slashes** even on Windows.
+- Three key variables:
+  - `RAW_DATA_DIR` -- raw WRDS pulls (CCM link, CRSP stocknames, Compustat
+    fundq, CRSP daily, market index). Treated as read-only inputs. Script 1
+    skips any file that already exists, so re-runs and replications don't
+    re-pull. Delete a file to refresh.
+  - `DATA_DIR` -- derived parquets / .dta produced by scripts 2-4
+    (`regdata.parquet`, `figure-data.parquet`, `trading-dates.parquet`,
+    `sample-selection.parquet`, `sample-identifiers.*`). Replication runs
+    typically wipe this folder and rerun scripts 2-4 against the preserved
+    `RAW_DATA_DIR`.
+  - `OUTPUT_DIR` -- tables and figures, defaults to `output/`.
+- Python: `load_dotenv(".env", override=True); raw_data_dir = os.getenv("RAW_DATA_DIR"); data_dir = os.getenv("DATA_DIR")`
+- R: `load_dot_env(".env"); raw_data_dir <- Sys.getenv("RAW_DATA_DIR"); data_dir <- Sys.getenv("DATA_DIR")`
+- Stata: `doenv using ".env"; local raw_data_dir "\`r(RAW_DATA_DIR)'"; local data_dir "\`r(DATA_DIR)'"`
+- `.env` files are strict KEY=VALUE -- no `#` comments, no headers (env
+  parsing tooling chokes on them).
 
 ### Credentials
 
@@ -133,6 +173,40 @@ WRDS directly (it reads .dta files produced by Python).
 - Winsorization at 1%/99% (see `winsorize_x` in utils.R, `winsorize` in
   `2-transform-data.py`)
 - Financials (SIC 60-69) and utilities (SIC 49) excluded
+
+### Logging via batch_run (run_with_echo)
+
+`run-all.py` runs each numbered script through `batch_run()` (defined in
+`utils.py`), which spawns a fresh Python subprocess via `run_with_echo.py`
+and writes a sibling `.log` file. Each `.log` contains:
+
+- "Started: ..." timestamp at the top.
+- Every top-level statement of the script echoed with `>>> ` / `... `
+  continuations (REPL-style).
+- `print()` output and warnings interleaved with the statements -- the
+  same SAS-log shape produced by R CMD BATCH for R, and by SAS / Stata's
+  native log behavior.
+
+`run_with_echo.py` is a ~30-line wrapper that uses `ast.parse()` to walk
+top-level statements in the target script, prints each one with the REPL
+prefix, then `exec()`s it in a shared namespace. Comments and blank lines
+are preserved verbatim. The wrapper writes to stdout; `batch_run()`
+redirects that stdout to the .log file.
+
+Each pipeline run drops five `.log` files into `log/`:
+`1-download-data.log`, `2-transform-data.log`, `3-figures.log`,
+`4-analyze-data.log`, and `5-data-provenance.log`. Together with the
+exported `sample-identifiers.{parquet,csv}` (in `DATA_DIR`) these are the
+JAR Data and Code Sharing Policy artifacts.
+
+The R-only sister template uses an equivalent `batch_run()` that calls
+`R CMD BATCH` instead of `run_with_echo.py`. SAS and Stata produce the
+same SAS-log shape natively. All four pipeline languages emit visually
+consistent per-script logs.
+
+`batch_run()` is also useful for one-off pulls: write a small
+`pulls/<date>-<topic>.py`, then call `batch_run("pulls/<date>-<topic>.py")`
+from a Python shell. The sibling `.log` lands next to the script.
 
 ### Output Files
 
