@@ -119,7 +119,14 @@ whichever language you prefer. All read the same data files.
 
 Optional (for R or Stata scripts):
 - **R** (>= 4.0) and **RStudio** — [posit.co](https://posit.co/download/rstudio-desktop/)
-- **Stata** (16+) with `reghdfe`, `estout`, `projectpaths`, `doenv` packages
+- **Stata** (>= 17, for the `collect` framework used in the bundled
+  `4-analyze-data.do`) with `reghdfe`, `estout`, `projectpaths`, and
+  `doenv` packages installed. Stata does not add itself to PATH on
+  install; if `stata` doesn't run from a fresh shell, either add the
+  Stata bin directory to PATH or set `STATA_BIN=path/to/stata.exe` in
+  `.env` so `batch_run_stata()` can find it. Default install paths
+  (`C:/Program Files/Stata*/Stata*-64.exe` on Windows, the standard
+  Mac and Linux locations) are auto-detected.
 
 ## Configuration
 
@@ -181,8 +188,11 @@ plain text) is consistent across all four:
 |---|---|---|
 | R | `batch_run()` → `R CMD BATCH` | `log/<script>.Rout` |
 | Python | `batch_run()` → `run_with_echo.py` | `log/<script>.log` |
-| Stata | `log using "log/<script>.log"` at the top of the .do file | `log/<script>.log` |
-| SAS | Built-in (e.g. `sas -log log/<script>.log` from CLI) | `log/<script>.log` |
+| Stata | `log using` at top of .do file + `batch_run_stata()` from R/Python | `log/<script>-stata.log` |
+| SAS | `batch_run_sas()` from R/Python | `log/<script>-sas.log` |
+
+The `-stata` / `-sas` suffixes avoid collisions with same-stem Python
+`.log` files in mixed-language combos.
 
 A pipeline run writes one log per numbered step:
 

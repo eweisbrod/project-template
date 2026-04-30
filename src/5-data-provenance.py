@@ -65,20 +65,49 @@ print(f"rdq range      = {sample_ids['rdq'].min()} to {sample_ids['rdq'].max()}"
 
 # File inventory ---------------------------------------------------------------
 
+# Function header below is a docstring — Python's standard for
+# function-level documentation (PEP 257). The format we use here is
+# Google-style (with explicit `Args:` and `Returns:` sections); NumPy
+# style and reStructuredText are also common. IDEs and tools like Sphinx
+# render docstrings as in-editor help and as published API docs.
+
 def list_dir(directory):
+    """Print a directory listing with mtime, size, and SHA256 hash per file.
+
+    Used to record what was on disk at the time the script ran. Bails out
+    cleanly if `directory` is unset or missing so the rest of the script
+    can still report what it can find.
+
+    Args:
+        directory: Path-like to the directory to inventory. None, empty
+            string, or a non-existent path all produce a "skipping"
+            message and return early.
+
+    Returns:
+        None. Called for the printing side effect.
+    """
     if not directory or not Path(directory).is_dir():
         print("  (directory not set or missing; skipping)")
         return
-    for f in sorted(Path(directory).iterdir()):
+
+    # iterdir() yields Path objects (not just basenames); sort by name
+    # for deterministic order across runs.
+    for f in sorted(Path(directory).iterdir(), key=lambda p: p.name):
         if not f.is_file():
-            continue
+            continue  # one-level only; skip subdirectories
+
+        # Stream the file in 1 MB chunks to compute SHA256 without
+        # loading multi-GB parquets into RAM.
         h = hashlib.sha256()
         with f.open("rb") as fh:
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 h.update(chunk)
+
         size_mb = f.stat().st_size / 1e6
         mtime = time.strftime("%Y-%m-%d %H:%M",
                               time.localtime(f.stat().st_mtime))
+        # f-string column widths line everything up so the inventory
+        # reads like a table.
         print(f"  {f.name:<40s}  {mtime}  {size_mb:>8.1f} MB  sha256={h.hexdigest()}")
 
 

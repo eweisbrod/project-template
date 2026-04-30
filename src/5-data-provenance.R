@@ -68,17 +68,46 @@ range(sample_ids$rdq)         # rdq range
 
 # File inventory ---------------------------------------------------------------
 
+# Function header below uses roxygen2 syntax (the `#'` prefix). Roxygen2 is
+# the de facto standard for documenting R functions — even in non-package
+# code it's worth using, because RStudio renders it as in-editor help and
+# any reader familiar with R recognizes `@param` / `@return` / `@examples`.
+
+#' Print a directory listing with mtime, size, and SHA256 hash per file.
+#'
+#' Used to record what was on disk at the time the script ran. Bails out
+#' cleanly if `dir` is unset or missing so the rest of the script can
+#' still report what it can find.
+#'
+#' @param dir Path to the directory to inventory. `NULL`, empty string,
+#'   or a non-existent path all produce a "skipping" message and an
+#'   invisible NULL return.
+#' @return Invisible `NULL`. Called for the printing side effect.
+#' @examples
+#'   list_dir(Sys.getenv("DATA_DIR"))
 list_dir <- function(dir) {
   if (is.null(dir) || !nzchar(dir) || !dir.exists(dir)) {
     message("(directory not set or missing; skipping)")
     return(invisible())
   }
-  files <- list.files(dir, no.. = TRUE)
-  for (f in sort(files)) {
+
+  # `no.. = TRUE` excludes "." and ".." from the listing. Sorting keeps
+  # the inventory in a deterministic order across runs.
+  files <- sort(list.files(dir, no.. = TRUE))
+
+  for (f in files) {
     path <- file.path(dir, f)
-    if (dir.exists(path)) next  # skip subdirectories
+    if (dir.exists(path)) next  # one-level only; skip subdirectories
+
+    # `file.info` returns mtime + size in one call. `digest::digest` with
+    # `file = path` streams the file from disk so we don't load big
+    # parquets into RAM just to hash them.
     info <- file.info(path)
     sha  <- digest::digest(file = path, algo = "sha256")
+
+    # `message()` writes to stderr, which `R CMD BATCH` captures into
+    # the .Rout. The column widths in `sprintf` line everything up so
+    # the inventory reads like a table.
     message(sprintf("  %-35s  %s  %8.1f MB  sha256=%s",
                     f,
                     format(info$mtime, "%Y-%m-%d %H:%M"),

@@ -75,11 +75,31 @@ FF12_RANGES = [
 
 
 def assign_ff12(sic_col: str = "siccd") -> list[pl.Expr]:
-    """Return polars expressions for FF12 and ff12num columns from a SIC column."""
-    # Build a chained when/then for the name
+    """Build polars expressions that map SIC codes to FF12 industry / number.
+
+    Returns a pair of expressions you can splat into `df.with_columns()`
+    to add a string `FF12` column and a numeric `ff12num` column based
+    on a SIC-code column already in the frame. Codes outside any
+    defined range collapse to `"Other"` / `12`.
+
+    Args:
+        sic_col: Name of the existing SIC column to read from. Defaults
+            to `"siccd"` (CRSP stocknames_v2 convention). Pass `"sich"`
+            if you're using Compustat instead.
+
+    Returns:
+        A two-element list of polars expressions: `[FF12, ff12num]`.
+        Use as `df.with_columns(*assign_ff12("siccd"))`.
+
+    Example:
+        >>> df.with_columns(*assign_ff12("siccd"))
+    """
+    # Build chained when/then expressions. We iterate in REVERSE so the
+    # FIRST matching range in the FF12_RANGES list "wins" — polars
+    # when/then evaluates outside-in, so the last-written branch is
+    # checked first at runtime.
     expr_name = pl.lit("Other")
     expr_num = pl.lit(12)
-    # Process in reverse so the first match wins
     for lo, hi, name, num in reversed(FF12_RANGES):
         cond = (pl.col(sic_col) >= lo) & (pl.col(sic_col) <= hi)
         expr_name = pl.when(cond).then(pl.lit(name)).otherwise(expr_name)
@@ -303,6 +323,176 @@ def batch_run(
             webbrowser.open(log_path.resolve().as_uri())
         except Exception:
             pass
+
+    return {"returncode": result.returncode, "log_path": str(log_path)}
+
+
+# Find an external interpreter binary ---------------------------------------
+
+# Helper used by batch_run_stata() / batch_run_sas() to locate the
+# interpreter on the user's machine. Order:
+#   1. The named env var (e.g. STATA_BIN, SAS_BIN) if set.
+#   2. shutil.which() against each candidate name (works if on PATH).
+#   3. The first existing file from a list of common install paths.
+# Returns the resolved path, or None if none of the above worked.
+
+def _find_external_bin(env_var: str,
+                       candidate_names: list[str],
+                       common_paths: list[str]) -> str | None:
+    import os
+    import shutil
+    import glob as _glob
+
+    bin_path = os.environ.get(env_var, "")
+    if bin_path and Path(bin_path).exists():
+        return bin_path
+
+    for nm in candidate_names:
+        found = shutil.which(nm)
+        if found:
+            return found
+
+    for p in common_paths:
+        hits = _glob.glob(p)
+        if hits:
+            return hits[0]
+
+    return None
+
+
+# Run a Stata script via stata -b do ----------------------------------------
+
+def batch_run_stata(file: str | Path,
+                    log_path: str | Path | None = None,
+                    stata_bin: str | None = None) -> dict:
+    """Run a Stata .do file in batch mode and write its log into log/.
+
+    Spawns `stata -b do <file>`, which produces a log alongside the .do
+    file. We move it to `log_path` afterwards so all per-script logs
+    end up in the same place. Default log filename includes a `-stata`
+    suffix so it does not collide with a same-stem Python `.log`.
+
+    Stata does not add itself to PATH on install on any platform, so
+    many users will need to set `STATA_BIN` in `.env`. This function
+    tries default install paths automatically; only custom installs
+    need explicit configuration. Requires Stata 17+ (the bundled
+    `4-analyze-data.do` uses Stata's `collect` framework).
+
+    Args:
+        file: Path to the .do file to execute.
+        log_path: Where to write the log. Defaults to
+            `log/<basename>-stata.log`.
+        stata_bin: Override path to the Stata executable. None triggers
+            a search: STATA_BIN env var → which() → common install
+            paths → error.
+
+    Returns:
+        dict with keys 'returncode' and 'log_path'.
+    """
+    file = Path(file)
+    if not file.exists():
+        raise FileNotFoundError(f"batch_run_stata: script not found: {file}")
+
+    if log_path is None:
+        log_path = Path("log") / f"{file.stem}-stata.log"
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if stata_bin is None:
+        stata_bin = _find_external_bin(
+            env_var="STATA_BIN",
+            candidate_names=["stata", "stata-mp", "stata-se", "stata-be",
+                             "StataMP-64", "StataSE-64", "StataBE-64"],
+            common_paths=[
+                r"C:/Program Files/Stata*/Stata*-64.exe",
+                "/Applications/Stata/Stata*.app/Contents/MacOS/Stata*",
+                "/usr/local/stata*/stata-*",
+            ],
+        )
+    if stata_bin is None:
+        raise RuntimeError(
+            "batch_run_stata: could not locate Stata. Add it to PATH or "
+            'set STATA_BIN="path/to/stata.exe" in .env.'
+        )
+
+    result = subprocess.run([stata_bin, "-b", "do", str(file)])
+
+    # Stata's -b mode writes <basename>.log next to the .do file. Move it
+    # so all per-script logs live under log/.
+    produced = file.with_suffix(".log")
+    if produced.exists() and produced.resolve() != log_path.resolve():
+        log_path.write_bytes(produced.read_bytes())
+        produced.unlink()
+
+    if result.returncode == 0:
+        print(f"batch_run_stata OK -> {log_path}")
+    else:
+        print(f"Stata exited {result.returncode} (see {log_path})",
+              file=sys.stderr)
+
+    return {"returncode": result.returncode, "log_path": str(log_path)}
+
+
+# Run a SAS script via sas -sysin -------------------------------------------
+
+def batch_run_sas(file: str | Path,
+                  log_path: str | Path | None = None,
+                  sas_bin: str | None = None) -> dict:
+    """Run a SAS .sas file in batch mode and write its log into log/.
+
+    Mirrors `batch_run_stata()` for SAS. Uses `-SYSIN <file> -LOG <log_path>`
+    so SAS writes its log directly to the requested path (no post-hoc
+    move needed). Default log filename includes a `-sas` suffix to
+    keep it from colliding with same-stem Python `.log` files.
+
+    This template doesn't currently include any `.sas` scripts, but the
+    helper is useful in projects that mix SAS into the pipeline.
+
+    Args:
+        file: Path to the .sas file to execute.
+        log_path: Where to write the log. Defaults to
+            `log/<basename>-sas.log`.
+        sas_bin: Override path to the SAS executable. None triggers a
+            search: SAS_BIN env var → which() → common install paths
+            → error.
+
+    Returns:
+        dict with keys 'returncode' and 'log_path'.
+    """
+    file = Path(file)
+    if not file.exists():
+        raise FileNotFoundError(f"batch_run_sas: script not found: {file}")
+
+    if log_path is None:
+        log_path = Path("log") / f"{file.stem}-sas.log"
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if sas_bin is None:
+        sas_bin = _find_external_bin(
+            env_var="SAS_BIN",
+            candidate_names=["sas"],
+            common_paths=[
+                r"C:/Program Files/SASHome/SASFoundation/*/sas.exe",
+                "/usr/local/SASHome/SASFoundation/*/sas",
+                "/opt/sas/SASHome/SASFoundation/*/sas",
+            ],
+        )
+    if sas_bin is None:
+        raise RuntimeError(
+            "batch_run_sas: could not locate SAS. Add it to PATH or "
+            'set SAS_BIN="path/to/sas.exe" in .env.'
+        )
+
+    result = subprocess.run([
+        sas_bin, "-SYSIN", str(file), "-LOG", str(log_path),
+    ])
+
+    if result.returncode == 0:
+        print(f"batch_run_sas OK -> {log_path}")
+    else:
+        print(f"SAS exited {result.returncode} (see {log_path})",
+              file=sys.stderr)
 
     return {"returncode": result.returncode, "log_path": str(log_path)}
 

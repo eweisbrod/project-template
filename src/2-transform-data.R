@@ -48,7 +48,13 @@ sample_selection <- tibble::tibble(
   step = integer(), description = character(), obs = integer()
 )
 
-# Define a helper function to add sample selection steps to the table
+#' Append one row to the running sample-selection table.
+#'
+#' @param tbl  The current sample-selection tibble to grow.
+#' @param step Integer step number.
+#' @param desc Human-readable description shown in the published table.
+#' @param n    Row count after this step (use `count_rows()` defined below).
+#' @return The input `tbl` with one row added.
 add_step <- function(tbl, step, desc, n) {
   dplyr::bind_rows(tbl,
                    tibble::tibble(step = step, description = desc,
@@ -83,7 +89,15 @@ ccm_tbl        <- tbl(con, glue("read_parquet('{raw_data_dir}/ccm-link.parquet')
 stocknames_tbl <- tbl(con, glue("read_parquet('{raw_data_dir}/crsp-stocknames.parquet')"))
 
 
-# count_rows() works on both lazy dbplyr tables and regular data frames
+#' Count rows of either a lazy dbplyr table or an in-memory data frame.
+#'
+#' Lets us track sample-selection counts without forcing a full
+#' `collect()` of a dbplyr query (which would pull all rows into R).
+#' For lazy tables we run a `SELECT COUNT(*)` on the database; for
+#' in-memory data frames we just call `nrow()`.
+#'
+#' @param x A dbplyr lazy table or a data frame / tibble.
+#' @return Integer scalar — the number of rows.
 count_rows <- function(x) {
   if (inherits(x, "tbl_lazy")) {
     x |> summarize(n = n()) |> pull(n) |> as.integer()

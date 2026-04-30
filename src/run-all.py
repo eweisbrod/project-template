@@ -38,7 +38,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from utils import batch_run
+from utils import batch_run, batch_run_stata
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -65,7 +65,6 @@ def main() -> None:
         "src/2-transform-data.py",
         "src/3-figures.py",
         "src/4-analyze-data.py",
-        "src/5-data-provenance.py",
     ]
     for script in scripts:
         log_path = log_dir / Path(script).with_suffix(".log").name
@@ -74,6 +73,20 @@ def main() -> None:
             print(f"ABORT: {script} exited {result['returncode']}; "
                   f"see {log_path}", file=sys.stderr)
             sys.exit(result["returncode"])
+
+    # If the user picked a Stata-inclusive combo at setup, the .do file
+    # is still on disk; run it too so the Stata tables are produced as
+    # part of this pipeline run. The presence of the .do file IS the gate.
+    if Path("src/4-analyze-data.do").exists():
+        batch_run_stata("src/4-analyze-data.do",
+                        log_path=log_dir / "4-analyze-data-stata.log")
+
+    # Provenance step runs last so it inventories the Stata outputs too.
+    result = batch_run("src/5-data-provenance.py",
+                       log_path=log_dir / "5-data-provenance.log",
+                       open_=False)
+    if result["returncode"] != 0:
+        sys.exit(result["returncode"])
 
     elapsed = time.time() - start_all
     print(f"\nPipeline complete in {elapsed/60:.1f} min. Logs in: log/")

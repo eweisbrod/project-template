@@ -58,6 +58,14 @@ batch_run("src/3-figures.R",
 batch_run("src/4-analyze-data.R",
           log_path = "log/4-analyze-data.Rout", open = FALSE)
 
+# If the user picked a Stata-inclusive combo at setup, the .do file is
+# still on disk; run it too so the Stata tables are produced as part of
+# this pipeline run. The presence of the .do file IS the gate.
+if (file.exists("src/4-analyze-data.do")) {
+  batch_run_stata("src/4-analyze-data.do",
+                  log_path = "log/4-analyze-data-stata.log")
+}
+
 batch_run("src/5-data-provenance.R",
           log_path = "log/5-data-provenance.Rout", open = FALSE)
 

@@ -45,7 +45,7 @@ local output_dir "`r(OUTPUT_DIR)'"
 // session is open.
 cap mkdir "log"
 cap log close
-log using "log/4-analyze-data.log", replace text
+log using "log/4-analyze-data-stata.log", replace text
 
 display "Using data directory: `data_dir'"
 display "Using output directory: `output_dir'"

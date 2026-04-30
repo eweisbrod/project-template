@@ -128,8 +128,17 @@ ft_freq <- flextable(table2) |> autofit()
 # Table 3: Descriptive Statistics
 # =============================================================================
 
+#' Default number formatter for descriptive-stat tables: 3-digit comma format.
+#' Used as the `fmt` argument to `datasummary()` so all numeric stats
+#' (mean, SD, min, max, etc.) print with the same precision and
+#' thousands separators.
 my_fmt <- function(x) formattable::comma(x, digits = 3)
 
+#' Non-missing-count formatter for descriptive-stat tables.
+#' Returns the count as an integer with thousands separators, formatted
+#' to slot into a `datasummary()` `(N = NN)` column. Special-case: if
+#' the column is a logical of all-NA (a `datasummary` quirk for
+#' character columns), report the column length instead.
 NN <- function(x) {
   out <- if (is.logical(x) && all(is.na(x))) length(x) else sum(!is.na(x))
   formattable::comma(out, digits = 0)
@@ -197,7 +206,18 @@ models <- list(
                      regdata, fixef.rm = "singletons")
 )
 
-# Custom function to detect whether controls are in each model
+#' S3 method that adds a "Controls" indicator row to modelsummary tables.
+#'
+#' `modelsummary` calls `glance_custom()` on each model to gather extra
+#' goodness-of-fit columns. Defining `glance_custom.fixest` (the
+#' fixest-specific S3 method) lets us inject a custom row that says "X"
+#' when the model's coefficients include our control set and is blank
+#' otherwise. The rest of the gof formatting is configured via `gm`
+#' below.
+#'
+#' @param x A fitted `fixest` model (typically from `feols()`).
+#' @param ... Ignored; required for the S3 method signature.
+#' @return One-row data frame with column `Controls`, value `"X"` or `""`.
 glance_custom.fixest <- function(x, ...) {
   controls <- c("log_mve_std", "loss")
   if (all(controls %in% names(coef(x)))) {

@@ -10,9 +10,19 @@ message("set R formatting options")
 
 # Parquet functions ------------------------------------------------------------
 
-# allows for use of reading and writing parquet without library(arrow)
-# also sets default compression method for writing
+# Re-exports of arrow read/write so scripts can call read_parquet() /
+# write_parquet() without `library(arrow)` and without thinking about
+# compression defaults. Roxygen2 (#' style comments) is the standard for
+# documenting R functions — RStudio renders these blocks as in-editor help.
+
+#' Read a parquet file into a tibble. Thin alias for `arrow::read_parquet`.
 read_parquet <- arrow::read_parquet
+
+#' Write a tibble to parquet with sensible compression defaults.
+#'
+#' @param x A data.frame or tibble.
+#' @param p Output file path.
+#' @return Invisibly, the written object (same as `arrow::write_parquet`).
 write_parquet <- function(x, p) {
   arrow::write_parquet(x, p, compression = "gzip", compression_level = 5)
 }
@@ -22,16 +32,33 @@ message("imported parquet functions")
 
 # Variable transformation functions --------------------------------------------
 
-# general function to standardize a variable to mean zero, sd of one
+#' Standardize a numeric vector to mean 0, standard deviation 1.
+#'
+#' @param x Numeric vector. NAs are propagated (`na.rm = TRUE` is used for
+#'   the mean and SD, so the centering is computed on the non-NA values).
+#' @return Numeric vector of the same length as `x`.
+#' @examples
+#'   standardize(c(1, 2, 3, 4, 5))
 standardize <- function(x){
   (x - mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
 }
 
 
-# general function to winsorize a variable in a mutate statement.
-# cuts = c(bottom, top) — pass e.g. c(0, 0.01) for one-sided winsorization.
-# type = 2 returns an actual observation (no interpolation), so
-# quantile(winsorize_x(x), c(0, cuts[1])) returns equal values at both ends.
+#' Winsorize a numeric vector at the given lower/upper quantiles.
+#'
+#' Replaces extreme values with the nearest non-trimmed quantile (clipping,
+#' not deletion). Useful inside `dplyr::mutate()`.
+#'
+#' @param x Numeric vector.
+#' @param cuts Length-2 numeric vector `c(bottom, top)`. Defaults to 1% on
+#'   each side (`c(0.01, 0.01)`). Pass `c(0, 0.01)` for one-sided
+#'   winsorization.
+#' @return Numeric vector of the same length as `x`, with values clipped
+#'   to the chosen quantiles.
+#' @details
+#'   `quantile(..., type = 2)` returns an actual observation (no
+#'   interpolation), so after winsorizing the empirical quantiles at the
+#'   cut points are equal to the cut values.
 winsorize_x = function(x, cuts = c(0.01, 0.01)) {
   cut_point_top    <- quantile(x, 1 - cuts[2], na.rm = TRUE, type = 2)
   cut_point_bottom <- quantile(x,     cuts[1], na.rm = TRUE, type = 2)
@@ -42,7 +69,16 @@ winsorize_x = function(x, cuts = c(0.01, 0.01)) {
   return(x)
 }
 
-# general function to truncate a variable in a mutate statement.
+#' Truncate a numeric vector at the given lower/upper quantiles.
+#'
+#' Like `winsorize_x()` but replaces extreme values with `NA` instead of
+#' clipping to the cutoff. Use truncation when you want to exclude
+#' outliers from downstream calculations entirely; use winsorization when
+#' you want to keep the observations but cap their influence.
+#'
+#' @param x Numeric vector.
+#' @param cuts Length-2 numeric vector `c(bottom, top)`; default `c(0.01, 0.01)`.
+#' @return Numeric vector of the same length as `x` with extremes set to NA.
 truncate_x = function(x, cuts = c(0.01, 0.01)) {
   cut_point_top    <- quantile(x, 1 - cuts[2], na.rm = TRUE, type = 2)
   cut_point_bottom <- quantile(x,     cuts[1], na.rm = TRUE, type = 2)
@@ -57,6 +93,22 @@ message("imported transformation functions")
 
 # Check Duplicates -------------------------------------------------------------
 
+#' Find and inspect duplicate groups in a data frame.
+#'
+#' Counts the number of rows per group at the levels you pass via `...`,
+#' reports any duplicates, and (interactively) offers to save the
+#' duplicated rows to the global environment as `duplicated_data` for
+#' inspection. Useful for debugging unique-key assumptions before a join.
+#'
+#' @param data A data frame / tibble.
+#' @param ... Bare column names that should uniquely identify each row
+#'   (e.g. `gvkey, datadate`).
+#' @return Invisible NULL. Called for side effects: prints a one-line
+#'   summary, optionally saves duplicated rows.
+#' @examples
+#' \dontrun{
+#'   check_duplicates(fundq, gvkey, datadate)
+#' }
 check_duplicates <- function(data, ...) {
   # Capture the variable names
   group_vars <- rlang::enquos(...)
@@ -123,72 +175,63 @@ message("imported duplicate check function")
 
 # Streaming download to parquet ------------------------------------------------
 
-# Streams a dbplyr lazy table (or DBI connection + query) to a local parquet
-# file via a server-side cursor. The function is database-agnostic — anything
-# that gives you a DBI connection works (WRDS PostgreSQL, BigQuery via the
-# bigrquery DBI driver, Snowflake via odbc, a local DuckDB, etc.). It used
-# to be called download_parquet(); the name was changed because the WRDS-specific
-# bit lives in your connection setup, not here.
-#
-# Each batch is written via arrow::ParquetFileWriter so column types are
-# preserved and peak RAM stays bounded.
-#
-# See 1-download-data.R for the raw version of this code (the Compustat fundq
-# download), which shows each step in detail. This function wraps that pattern
-# so you can reuse it without repeating the boilerplate.
-#
-# API: takes a dbplyr lazy table (constructed via tbl() + dplyr verbs) and
-# streams the query results to parquet using the existing connection. This
-# is the same shape as Ian Gow's db2pq::lazy_tbl_to_pq(), with the addition
-# of auto-sized batches and zstd compression by default.
-#
-# RAM MANAGEMENT
-# Peak RAM is roughly: batch_size × n_columns × 8 bytes.
-# If you don't specify batch_size, the function auto-calculates it from
-# max_ram_mb by peeking at the number of columns in the query result:
-#   batch_size = floor(max_ram_mb × 1e6 / (n_columns × 8))
-# For example, with max_ram_mb = 8000 (8 GB) and 3 columns the raw target
-# would be 333 million rows. We then SILENTLY CAP this at 5 million rows
-# so users see periodic progress output instead of a long silent fetch
-# (cost: a handful of extra round-trips on huge narrow tables, negligible).
-# The cap is only applied to auto-sized batches; if you pass batch_size
-# explicitly, your value is respected as-is.
-#
-# NOTE: Actual peak RAM will be max_ram_mb plus ~1-2 GB of baseline overhead
-# (R session, loaded packages, parquet writer buffers). On a 16 GB machine
-# the default of 8 GB is conservative; on a 4 GB machine, try max_ram_mb = 2000.
-#
-# Arguments:
-#   tbl         - a dbplyr lazy table (e.g. tbl(wrds, ...) |> filter() |> select())
-#   output_path - file path for the output parquet file
-#   max_ram_mb  - target peak RAM in MB (default 8000 = 8 GB). Used to auto-
-#                 calculate batch_size if batch_size is not specified.
-#   batch_size  - rows per chunk (default NULL = auto from max_ram_mb,
-#                 capped at 5M). Set explicitly to override.
-#   compression - parquet compression (default "zstd"; smaller files than
-#                 the arrow default of "snappy")
-#   skip_if_exists - if TRUE (default) and output_path already exists, skip
-#                    the download and return immediately. Delete the file to
-#                    force a re-download. This makes replication runs fast
-#                    and cheap on the WRDS side.
-#
-# Returns: invisible(total_rows) — the number of rows downloaded, or 0 if
-#          the file already existed and was skipped.
-#
-# Examples:
-#   # Pipe a lazy tbl into the function (most common):
-#   tbl(wrds, in_schema("crsp", "dsf_v2")) |>
-#     filter(dlycaldt >= "1970-01-01") |>
-#     select(permno, dlycaldt, dlyret) |>
-#     download_parquet("data/crsp.parquet")
-#
-#   # Lower RAM target (e.g. 4 GB machine):
-#   tbl(wrds, in_schema("comp", "funda")) |>
-#     download_parquet("data/funda.parquet", max_ram_mb = 2000)
-#
-#   # Explicit batch size (no cap applied):
-#   tbl(wrds, ...) |> download_parquet("out.parquet", batch_size = 500000)
-
+#' Stream a dbplyr lazy table to a local parquet file.
+#'
+#' Database-agnostic — works with any dbplyr `tbl()` backed by a DBI
+#' connection (WRDS PostgreSQL via RPostgres, BigQuery via bigrquery,
+#' Snowflake via odbc, local DuckDB, etc.). Used to be called
+#' `download_wrds()`; the rename reflects that the WRDS-specific bit
+#' lives in your connection setup, not in this function.
+#'
+#' @param tbl A dbplyr lazy table built via `tbl(connection, ...)` and
+#'   optional dplyr verbs (`filter`, `select`, `mutate`, joins). The
+#'   query is rendered to SQL and executed on the database.
+#' @param output_path File path for the output parquet file.
+#' @param max_ram_mb Target peak RAM in MB for auto-sized batches.
+#'   Default 8000 (8 GB). Ignored if `batch_size` is set explicitly.
+#' @param batch_size Rows per fetch from the server-side cursor. `NULL`
+#'   (default) auto-sizes from `max_ram_mb` by peeking at the number of
+#'   columns in the query result, then capping at 5 million rows so
+#'   progress messages appear at sensible intervals. Pass an integer to
+#'   override (no cap is applied).
+#' @param compression Parquet compression codec. Default `"zstd"` —
+#'   smaller files than the arrow default of `"snappy"`.
+#' @param skip_if_exists If `TRUE` (default), skip the download and
+#'   return immediately when `output_path` already exists. Delete the
+#'   file to force a refresh. Makes replication runs fast.
+#'
+#' @return Invisible integer — the number of rows downloaded, or `0` if
+#'   the file already existed and was skipped.
+#'
+#' @details
+#' Each batch is written via `arrow::ParquetFileWriter`, so column
+#' types are preserved and peak RAM stays bounded regardless of total
+#' table size. Peak RAM ≈ `batch_size * n_columns * 8 bytes` plus 1-2 GB
+#' of baseline overhead (R session, loaded packages, parquet writer
+#' buffers). On a 16 GB machine the default 8 GB target is conservative;
+#' on a 4 GB machine try `max_ram_mb = 2000`.
+#'
+#' This function follows the same shape as Ian Gow's
+#' `db2pq::lazy_tbl_to_pq()`, with the addition of auto-sized batches
+#' and zstd compression by default. See `1-download-data.R` for the
+#' un-wrapped version of this code (the Compustat fundq download), which
+#' shows each step in detail.
+#'
+#' @examples
+#' \dontrun{
+#'   # Pipe a lazy tbl into the function (most common):
+#'   tbl(wrds, in_schema("crsp", "dsf_v2")) |>
+#'     filter(dlycaldt >= "1970-01-01") |>
+#'     select(permno, dlycaldt, dlyret) |>
+#'     download_parquet("data/crsp.parquet")
+#'
+#'   # Lower RAM target (e.g. 4 GB machine):
+#'   tbl(wrds, in_schema("comp", "funda")) |>
+#'     download_parquet("data/funda.parquet", max_ram_mb = 2000)
+#'
+#'   # Explicit batch size (no cap applied):
+#'   tbl(wrds, ...) |> download_parquet("out.parquet", batch_size = 500000)
+#' }
 download_parquet <- function(tbl, output_path, max_ram_mb = 8000,
                           batch_size = NULL, compression = "zstd",
                           skip_if_exists = TRUE) {
@@ -278,41 +321,47 @@ message("imported download_parquet function")
 
 # Run an R script via R CMD BATCH ----------------------------------------------
 
-# batch_run() is source()-with-a-receipt: it runs an R script in a fresh
-# child process via R CMD BATCH and writes the corresponding .Rout next to
-# the script. Use this for the JAR-grade per-script logs that pair with
-# SAS, Stata, and Python pipeline logs.
-#
-# Why a child process? R CMD BATCH spawns a clean R session, runs the file,
-# and writes a SAS-log-shaped record (R version banner at the top, every
-# command echoed with `> ` / `+ `, output interleaved, proc.time() at the
-# bottom). The format is the closest R analog to a SAS or Stata log.
-#
-# Why not just source(echo = TRUE)? Because source() runs in your current
-# session, which (a) inherits your existing variables and packages, and
-# (b) spreads sink()/output through your live console — fine for live work,
-# wrong for a posterity log. R CMD BATCH gets you isolation + the .Rout
-# format for free.
-#
-# Behavior:
-# - Default log_path is sibling .Rout (e.g. "pulls/foo.R" -> "pulls/foo.Rout"),
-#   matching R CMD BATCH's own default.
-# - vanilla = TRUE skips your .Rprofile / .Renviron so the run isn't polluted
-#   by user-specific state. Override with vanilla = FALSE if you have a
-#   project-level .Rprofile that the pipeline depends on.
-# - open = TRUE auto-opens the .Rout in your editor so you don't leave RStudio
-#   to read the log. Set FALSE for non-interactive callers (run-all.R, CI).
-# - Returns invisibly: list(status, log_path).
-#
-# Examples:
-#   # Interactive: write a one-off pull, then batch_run it.
-#   batch_run("pulls/2026-04-29-fundq-2020.R")
-#
-#   # In run-all: explicit log_path so output lands in a timestamped dir.
-#   batch_run("src/1-download-data.R",
-#             log_path = file.path(log_dir, "1-download-data.Rout"),
-#             open     = FALSE)
-
+#' Run an R script via R CMD BATCH and write its .Rout log.
+#'
+#' `batch_run()` is `source()`-with-a-receipt: it spawns a fresh child R
+#' process, runs the script there, and writes a sibling `.Rout` file
+#' capturing the R version banner, every command echoed with `>` / `+`,
+#' output interleaved, and a closing `proc.time()` block. Visually the
+#' result is identical to a SAS or Stata log.
+#'
+#' @param file Path to the .R script to execute.
+#' @param log_path Where to write the .Rout. Default is sibling .Rout
+#'   (e.g. `pulls/foo.R` -> `pulls/foo.Rout`), matching R CMD BATCH's
+#'   own default.
+#' @param vanilla If `TRUE` (default), pass `--vanilla` to skip the
+#'   user's `.Rprofile` / `.Renviron` so the run is reproducible.
+#'   Override with `FALSE` only if you have a project-level `.Rprofile`
+#'   that the pipeline depends on.
+#' @param open If `TRUE` (default), auto-open the .Rout in your editor
+#'   when finished. Set `FALSE` for non-interactive callers like
+#'   run-all.R or CI.
+#'
+#' @return Invisible list with elements `status` (the R CMD BATCH exit
+#'   code) and `log_path` (where the .Rout landed).
+#'
+#' @details
+#' Why a child process? R CMD BATCH gives you isolation (the script
+#' can't pollute your interactive session, and your interactive session
+#' can't pollute the script), plus the canonical .Rout format for free.
+#' `source(echo = TRUE)` runs in your current session and spreads
+#' `sink()`/output through your live console — fine for live work,
+#' wrong for a posterity log.
+#'
+#' @examples
+#' \dontrun{
+#'   # Interactive: write a one-off pull, then batch_run it.
+#'   batch_run("pulls/2026-04-29-fundq-2020.R")
+#'
+#'   # In run-all: explicit log_path, no editor pop-up.
+#'   batch_run("src/1-download-data.R",
+#'             log_path = "log/1-download-data.Rout",
+#'             open     = FALSE)
+#' }
 batch_run <- function(file,
                      log_path = NULL,
                      vanilla  = TRUE,
@@ -349,29 +398,225 @@ batch_run <- function(file,
 message("imported batch_run function")
 
 
+# Find an external interpreter binary -----------------------------------------
+
+# Helper used by batch_run_stata() / batch_run_sas() to locate the
+# interpreter on the user's machine. Order:
+#   1. The named env var (e.g. STATA_BIN, SAS_BIN) if set.
+#   2. Sys.which() against each candidate name (works if it's on PATH).
+#   3. The first existing file from a list of common install paths.
+# Returns the resolved path, or NULL if none of the above worked.
+
+.find_external_bin <- function(env_var, candidate_names, common_paths) {
+  bin <- Sys.getenv(env_var, unset = "")
+  if (nzchar(bin) && file.exists(bin)) return(bin)
+
+  for (nm in candidate_names) {
+    found <- unname(Sys.which(nm))
+    if (nzchar(found)) return(found)
+  }
+
+  for (p in common_paths) {
+    hits <- Sys.glob(p)
+    if (length(hits) > 0L) return(hits[[1L]])
+  }
+
+  NULL
+}
+
+
+# Run a Stata script via stata -b do ------------------------------------------
+
+#' Run a Stata .do file in batch mode and write its log into log/.
+#'
+#' Spawns `stata -b do <file>`, which produces a log alongside the .do
+#' file. We move it to `log_path` afterwards so all per-script logs end
+#' up in the same place. Default log filename includes a `-stata`
+#' suffix so it does not collide with a same-stem Python `.log`.
+#'
+#' @param file Path to the .do file to execute.
+#' @param log_path Where to write the log. Default
+#'   `log/<basename>-stata.log`.
+#' @param stata_bin Override path to the Stata executable. Default
+#'   `NULL` triggers a search: `STATA_BIN` env var → `Sys.which("stata")`
+#'   / `which stata-mp` / `which StataMP-64` → common install paths →
+#'   error with instructions.
+#'
+#' @return Invisible list with `status` (exit code) and `log_path`.
+#'
+#' @details
+#' Stata does not add itself to PATH on install on any platform, so
+#' many users will need to set `STATA_BIN` in `.env`. The function tries
+#' default install paths automatically; only custom installs need
+#' explicit configuration. Requires Stata 17+ (the bundled
+#' `4-analyze-data.do` uses Stata's `collect` framework).
+#'
+#' @examples
+#' \dontrun{
+#'   batch_run_stata("src/4-analyze-data.do")
+#' }
+batch_run_stata <- function(file,
+                            log_path  = NULL,
+                            stata_bin = NULL) {
+
+  if (!file.exists(file)) {
+    stop("batch_run_stata: script not found: ", file, call. = FALSE)
+  }
+
+  if (is.null(log_path)) {
+    base     <- sub("\\.do$", "", basename(file), ignore.case = TRUE)
+    log_path <- file.path("log", paste0(base, "-stata.log"))
+  }
+  dir.create(dirname(log_path), showWarnings = FALSE, recursive = TRUE)
+
+  if (is.null(stata_bin)) {
+    stata_bin <- .find_external_bin(
+      env_var = "STATA_BIN",
+      candidate_names = c("stata", "stata-mp", "stata-se", "stata-be",
+                          "StataMP-64", "StataSE-64", "StataBE-64"),
+      common_paths = c(
+        "C:/Program Files/Stata*/Stata*-64.exe",
+        "/Applications/Stata/Stata*.app/Contents/MacOS/Stata*",
+        "/usr/local/stata*/stata-*"
+      )
+    )
+  }
+  if (is.null(stata_bin)) {
+    stop("batch_run_stata: could not locate Stata. Add it to PATH or set ",
+         "STATA_BIN=\"path/to/stata.exe\" in .env.", call. = FALSE)
+  }
+
+  status <- system2(stata_bin, args = c("-b", "do", shQuote(file)))
+
+  # Stata's -b mode writes <basename>.log next to the .do file. Move it
+  # so all per-script logs live under log/.
+  produced <- sub("\\.do$", ".log", file, ignore.case = TRUE)
+  if (file.exists(produced) && normalizePath(produced, mustWork = FALSE) !=
+                               normalizePath(log_path, mustWork = FALSE)) {
+    file.copy(produced, log_path, overwrite = TRUE)
+    file.remove(produced)
+  }
+
+  if (status == 0) {
+    message(sprintf("batch_run_stata OK -> %s", log_path))
+  } else {
+    warning(sprintf("Stata exited %d (see %s)", status, log_path))
+  }
+
+  invisible(list(status = status, log_path = log_path))
+}
+
+message("imported batch_run_stata function")
+
+
+# Run a SAS script via sas -sysin ---------------------------------------------
+
+#' Run a SAS .sas file in batch mode and write its log into log/.
+#'
+#' Mirrors `batch_run_stata()` for SAS. Uses `-SYSIN <file> -LOG <log_path>`
+#' so SAS writes its log directly to the requested path (no post-hoc
+#' move needed). Default log filename includes a `-sas` suffix to keep
+#' it from colliding with same-stem Python `.log` files.
+#'
+#' This template doesn't currently include any `.sas` scripts, but the
+#' helper is useful in projects that mix SAS into the pipeline.
+#'
+#' @param file Path to the .sas file to execute.
+#' @param log_path Where to write the log. Default `log/<basename>-sas.log`.
+#' @param sas_bin Override path to the SAS executable. Default `NULL`
+#'   triggers a search: `SAS_BIN` env var → `Sys.which("sas")` →
+#'   common install paths → error.
+#'
+#' @return Invisible list with `status` (exit code) and `log_path`.
+#'
+#' @examples
+#' \dontrun{
+#'   batch_run_sas("src/1-download-wrds-data.sas")
+#' }
+batch_run_sas <- function(file,
+                          log_path = NULL,
+                          sas_bin  = NULL) {
+
+  if (!file.exists(file)) {
+    stop("batch_run_sas: script not found: ", file, call. = FALSE)
+  }
+
+  if (is.null(log_path)) {
+    base     <- sub("\\.sas$", "", basename(file), ignore.case = TRUE)
+    log_path <- file.path("log", paste0(base, "-sas.log"))
+  }
+  dir.create(dirname(log_path), showWarnings = FALSE, recursive = TRUE)
+
+  if (is.null(sas_bin)) {
+    sas_bin <- .find_external_bin(
+      env_var = "SAS_BIN",
+      candidate_names = c("sas"),
+      common_paths = c(
+        "C:/Program Files/SASHome/SASFoundation/*/sas.exe",
+        "/usr/local/SASHome/SASFoundation/*/sas",
+        "/opt/sas/SASHome/SASFoundation/*/sas"
+      )
+    )
+  }
+  if (is.null(sas_bin)) {
+    stop("batch_run_sas: could not locate SAS. Add it to PATH or set ",
+         "SAS_BIN=\"path/to/sas.exe\" in .env.", call. = FALSE)
+  }
+
+  status <- system2(sas_bin,
+                    args = c("-SYSIN", shQuote(file),
+                             "-LOG",   shQuote(log_path)))
+
+  if (status == 0) {
+    message(sprintf("batch_run_sas OK -> %s", log_path))
+  } else {
+    warning(sprintf("SAS exited %d (see %s)", status, log_path))
+  }
+
+  invisible(list(status = status, log_path = log_path))
+}
+
+message("imported batch_run_sas function")
+
+
 # First-time project setup -----------------------------------------------------
 
-# project_setup() is an idempotent first-run helper. It's called at the top
-# of 1-download-data.R; on subsequent runs it sees .env on disk and returns
-# immediately. On the FIRST run (no .env yet) it prompts for:
-#   - language combination (R-inclusive only: 1, 3, 5, 6)
-#   - RAW_DATA_DIR, DATA_DIR, OUTPUT_DIR
-#   - WRDS keyring credentials
-#   - optional pruning of files for languages you didn't pick
-# and writes .env. The .env file's existence is the "have I been set up?"
-# flag — no separate state.
-#
-# Why is this in utils.R instead of a standalone setup.R script? readline()
-# has historically been finicky in source()'d scripts. Calling readline()
-# from a function in an interactive console works reliably. Wrapping the
-# whole onramp in one function keeps it out of script 1's main flow when
-# .env already exists.
-#
-# This function is R-only by design: it only offers language combos that
-# include R, so it can never end up deleting itself or the file that
-# called it. The Python sister `project_setup()` in utils.py mirrors this
-# rule with Python-inclusive combos.
-
+#' First-time project setup: language combo, paths, credentials, prune.
+#'
+#' Idempotent first-run helper called at the top of `1-download-data.R`.
+#' On the first call (no `.env` yet) it walks the user through choosing
+#' a language combination, entering data and output directories, storing
+#' WRDS credentials in the OS keyring, and optionally pruning files for
+#' languages they didn't pick. On subsequent calls it sees `.env` on
+#' disk and returns immediately — the file's existence is the "have I
+#' been set up?" flag, no separate state.
+#'
+#' @param force If `TRUE`, run the prompts even when `.env` already
+#'   exists (e.g. to redo language pruning or refresh credentials).
+#'   Default `FALSE`.
+#' @return Invisible NULL. Side effects: writes `.env`, sets keyring
+#'   entries, optionally deletes files in `src/`.
+#'
+#' @details
+#' Why is this a function in utils.R instead of a standalone setup.R
+#' script? Two reasons. First, `readline()` is finicky inside
+#' `source()`'d scripts but works reliably when called from an
+#' interactive console — even from inside a function. Second, baking
+#' setup into the top of script 1 means a fresh clone "just works" the
+#' first time you try to run it; there's no separate setup step the
+#' user has to remember.
+#'
+#' By design this function only offers R-inclusive combos (1, 3, 5, 6),
+#' so it cannot delete itself or the file that called it. The Python
+#' sister `project_setup()` in `utils.py` mirrors this rule with
+#' Python-inclusive combos.
+#'
+#' @examples
+#' \dontrun{
+#'   # Top of 1-download-data.R:
+#'   source("src/utils.R")
+#'   project_setup()       # prompts on first run, no-op afterwards
+#' }
 project_setup <- function(force = FALSE) {
   if (!force && file.exists(".env")) {
     return(invisible())
@@ -536,32 +781,35 @@ message("imported project_setup function")
 
 # Trading Days Function --------------------------------------------------------
 
-# Maps event dates to trading day windows for event studies.
-#
-# Given a dataset with event dates and a reference table of trading dates,
-# this function expands each observation into a window of trading days
-# around the event. Useful for computing CARs, abnormal volume, etc.
-#
-# Arguments:
-#   data          - data frame with at least one date column (the event date)
-#   trading_dates - data frame with columns: date (trading date), td (integer
-#                   trading day number, sequential with no gaps)
-#   event_col     - unquoted column name of the event date in data
-#   minus_offset  - negative integer, e.g., -1 for one trading day before event
-#   plus_offset   - positive integer, e.g., +1 for one trading day after event
-#
-# Returns:
-#   The input data expanded so each row becomes (plus_offset - minus_offset + 1)
-#   rows, with columns: td (event's trading day number), offset, rel_td
-#   (td + offset), and date (the actual calendar date of that trading day).
-#
-# Example:
-#   # Build a trading_dates table from CRSP daily data:
-#   # trading_dates <- crsp_daily |>
-#   #   distinct(date) |> arrange(date) |> mutate(td = row_number())
-#   #
-#   # Expand earnings announcements to a [-1, +1] window:
-#   # ea_windows <- trading_day_window(earnings, trading_dates, rdq, -1, 1)
+#' Expand event dates into trading-day windows for an event study.
+#'
+#' Given a data frame with event dates and a reference table of trading
+#' dates, this expands each row into `(plus_offset - minus_offset + 1)`
+#' rows — one per trading day in the window around the event. Useful
+#' for computing CARs, abnormal volume, etc.
+#'
+#' @param data Data frame containing at least one date column (the
+#'   event date) and any identifiers you want to keep (e.g. permno).
+#' @param trading_dates Data frame with columns `date` (trading date)
+#'   and `td` (integer trading day number, sequential with no gaps).
+#'   Build it as
+#'   `crsp_daily |> distinct(date) |> arrange(date) |> mutate(td = row_number())`.
+#' @param event_col Unquoted column name of the event date in `data`.
+#' @param minus_offset Negative integer; e.g. `-1` for one trading day
+#'   before the event.
+#' @param plus_offset Positive integer; e.g. `+1` for one trading day
+#'   after the event.
+#'
+#' @return The input data expanded so each row becomes
+#'   `(plus_offset - minus_offset + 1)` rows, with new columns:
+#'   `td` (event's trading day number), `offset`, `rel_td` (`td + offset`),
+#'   and `date` (the calendar date of that trading day).
+#'
+#' @examples
+#' \dontrun{
+#'   # Earnings-announcement [-1, +1] window:
+#'   ea_windows <- trading_day_window(earnings, trading_dates, rdq, -1, 1)
+#' }
 
 trading_day_window <- function(data, trading_dates, event_col, minus_offset, plus_offset) {
 
@@ -594,7 +842,19 @@ message("imported trading day window function")
 
 # Industry functions -----------------------------------------------------------
 
-# Assign FF12 industry name, given sic code
+# Industry classification helpers below use the Fama-French SIC-range
+# definitions from Kenneth French's data library. Each function takes a
+# numeric `sic` (vector or scalar) and returns the industry label or
+# number. Pair `assign_FF12()` with `assign_FF12_num()` if you want both
+# the human-readable name and the numeric code in your output.
+
+#' Map SIC code(s) to a Fama-French 12 industry name.
+#'
+#' @param sic Numeric SIC code, scalar or vector. Codes outside any
+#'   defined range collapse to `"Other"`.
+#' @return Character vector of FF12 industry names, same length as `sic`.
+#' @examples
+#'   assign_FF12(c(2000, 5500, 8000))  # Consumer Nondurables, Retail, Healthcare
 assign_FF12 <- function(sic) {
   dplyr::case_when(
     sic >= 0100 & sic <= 0999 ~ "Consumer Nondurables",
@@ -661,7 +921,14 @@ assign_FF12 <- function(sic) {
   )
 }
 
-# Assign FF12 industry number, given sic code
+#' Map SIC code(s) to a Fama-French 12 industry number (1-12).
+#'
+#' Numeric counterpart of `assign_FF12()`. Useful for sorting / faceting
+#' by FF12 in an order that matches the standard Fama-French numbering.
+#'
+#' @param sic Numeric SIC code, scalar or vector.
+#' @return Integer vector of FF12 industry numbers (1-11), or `12` for
+#'   anything outside the defined ranges (the "Other" bucket).
 assign_FF12_num <- function(sic) {
   dplyr::case_when(
     sic >= 0100 & sic <= 0999 ~ 1,
@@ -729,7 +996,11 @@ assign_FF12_num <- function(sic) {
 }
 
 
-# Assign FF49 industry name, given sic code
+#' Map SIC code(s) to a Fama-French 49 industry name.
+#'
+#' @param sic Numeric SIC code, scalar or vector.
+#' @return Character vector of FF49 industry names. Anything outside the
+#'   defined ranges collapses to `"Other"`.
 # Note that FF49 is just FF48 plus "Other"
 assign_FF49 <- function(sic) {
   dplyr::case_when(
@@ -803,7 +1074,13 @@ assign_FF49 <- function(sic) {
 
 
 
-# Assign FF49 industry number, given sic code
+#' Map SIC code(s) to a Fama-French 49 industry number (1-49).
+#'
+#' Numeric counterpart of `assign_FF49()`.
+#'
+#' @param sic Numeric SIC code, scalar or vector.
+#' @return Integer vector of FF49 industry numbers; codes outside the
+#'   defined ranges return `49` ("Almost Nothing").
 assign_FF49_num <- function(sic) {
   dplyr::case_when(
     sic >= 0100 & sic <= 0199 ~ 1,

@@ -187,15 +187,25 @@ all four:
 |---|---|---|
 | R | `batch_run()` calls `R CMD BATCH` (utils.R) | `log/<script>.Rout` |
 | Python | `batch_run()` calls `run_with_echo.py` (utils.py) | `log/<script>.log` |
-| Stata | `log using "log/<script>.log"` at top of .do file | `log/<script>.log` |
-| SAS | Built-in `proc printto`, or `sas -log log/<script>.log` from CLI | `log/<script>.log` |
+| Stata | `log using` at top of .do file + `batch_run_stata()` from R/Python | `log/<script>-stata.log` |
+| SAS | `batch_run_sas()` from R/Python (utils.{R,py}) | `log/<script>-sas.log` |
 
-R's `batch_run()` and Python's `batch_run()` both spawn a fresh child
-process so the log captures a clean session (no leakage from the
-parent). Stata's `log using` runs in the same Stata session — fine
-because Stata's natural workflow is one .do file per session anyway.
-SAS isn't currently in the polyglot template's pipeline (no
-`*-data.sas` files), but the same pattern would apply if added.
+The `-stata` and `-sas` suffixes prevent collisions with
+same-stem Python `.log` files in mixed-language combos. R's `.Rout`
+extension already disambiguates that side.
+
+`batch_run()`, `batch_run_stata()`, and `batch_run_sas()` all spawn a
+fresh child process so each per-script log captures a clean run.
+`batch_run_stata` and `batch_run_sas` locate their interpreter via,
+in order: a `STATA_BIN` / `SAS_BIN` env var → `which()` against
+common command names → a list of common install paths. Custom installs
+need `STATA_BIN=...` (or `SAS_BIN=...`) added to `.env`; default
+installs and PATH-installed setups work out of the box.
+
+`run-all.{R,py}` calls `batch_run_stata()` only when
+`src/4-analyze-data.do` is on disk — i.e. when the user picked a
+Stata-inclusive combo at setup time. The presence of the .do file IS
+the gate.
 
 ### Logging via batch_run (run_with_echo)
 
