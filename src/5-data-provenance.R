@@ -1,20 +1,20 @@
-# 5-data-provenance.R — sample identifiers + raw/derived/output provenance
+# 5-data-provenance.R — sample identifiers + raw/derived/output inventory
 # ============================================================================
-# This is the JAR Data and Code Sharing Policy artifact step. It produces
-# two things:
+# Two artifacts:
 #
 #   1. sample-identifiers.{parquet,csv} in DATA_DIR — the gvkey / permno /
-#      rdq triples for every observation in the regression sample.
+#      rdq triples for every observation in the regression sample. Useful
+#      to a co-author or future-self for reconstructing the sample
+#      without re-running scripts 1-2.
 #
-#   2. A printed table of every raw, derived, and output file with its
-#      mtime, size, and SHA256 hash. Run via batch_run() so the table
-#      lands inside this script's .Rout file alongside the R version
-#      banner and the proc.time block — the .Rout itself is the
-#      provenance log.
+#   2. A printed inventory of every file in RAW_DATA_DIR, DATA_DIR, and
+#      OUTPUT_DIR with mtime, size, and SHA256 hash. Run via batch_run()
+#      so the inventory lands inside this script's .Rout file with the R
+#      version banner and proc.time block.
 #
 # Style note: this script leans on R's auto-print at the top level —
-# bare expressions (e.g. `nrow(sample_ids)`) print themselves, so we use
-# comments as labels and skip the cat()/sprintf() boilerplate.
+# bare expressions print themselves, so we use comments as labels and
+# skip the cat()/sprintf() boilerplate.
 # ============================================================================
 
 
@@ -45,7 +45,9 @@ output_dir
 # Export sample identifiers ----------------------------------------------------
 
 # JAR: "whenever feasible, authors should provide the identifiers (e.g.,
-# CIK, CUSIP) of all the observations that make up the final sample."
+# CIK, CUSIP) of all the observations that make up the final sample." A
+# replicator with their own WRDS access can use these to verify the
+# sample without rerunning scripts 1-2.
 
 regdata <- read_parquet(glue("{data_dir}/regdata.parquet"))
 
@@ -64,23 +66,17 @@ n_distinct(sample_ids$gvkey)  # distinct gvkeys
 range(sample_ids$rdq)         # rdq range
 
 
-# File provenance: mtime, size, SHA256 -----------------------------------------
+# File inventory ---------------------------------------------------------------
 
-# SHA256 hashes prove a JAR replicator's downloaded data matches the
-# original analyst's. mtime alone gets clobbered by zip / copy / download;
-# the hash is content-addressed and survives.
-
-print_file_info <- function(files, dir) {
-  if (is.null(dir) || !nzchar(dir)) {
-    message("(env var not set; skipping)")
+list_dir <- function(dir) {
+  if (is.null(dir) || !nzchar(dir) || !dir.exists(dir)) {
+    message("(directory not set or missing; skipping)")
     return(invisible())
   }
-  for (f in files) {
+  files <- list.files(dir, no.. = TRUE)
+  for (f in sort(files)) {
     path <- file.path(dir, f)
-    if (!file.exists(path)) {
-      message(sprintf("  %-35s  (missing)", f))
-      next
-    }
+    if (dir.exists(path)) next  # skip subdirectories
     info <- file.info(path)
     sha  <- digest::digest(file = path, algo = "sha256")
     message(sprintf("  %-35s  %s  %8.1f MB  sha256=%s",
@@ -91,21 +87,11 @@ print_file_info <- function(files, dir) {
   }
 }
 
-raw_files <- c("ccm-link.parquet", "crsp-stocknames.parquet",
-               "fundq-raw.parquet", "crsp-dsf-v2.parquet",
-               "crsp-index.parquet")
+# Raw data (RAW_DATA_DIR)
+list_dir(raw_data_dir)
 
-derived_files <- c("regdata.parquet", "figure-data.parquet",
-                   "trading-dates.parquet", "sample-selection.parquet",
-                   "sample-identifiers.parquet", "sample-identifiers.csv")
+# Derived data (DATA_DIR)
+list_dir(data_dir)
 
-# Raw data files (RAW_DATA_DIR)
-print_file_info(raw_files, raw_data_dir)
-
-# Derived data files (DATA_DIR)
-print_file_info(derived_files, data_dir)
-
-# Output files (OUTPUT_DIR)
-out_files <- list.files(output_dir,
-                        pattern = "\\.tex$|\\.pdf$|\\.png$|\\.docx$")
-print_file_info(out_files, output_dir)
+# Output (OUTPUT_DIR)
+list_dir(output_dir)

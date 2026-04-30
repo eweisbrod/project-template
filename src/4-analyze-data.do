@@ -39,6 +39,14 @@ doenv using ".env"
 local data_dir   "`r(DATA_DIR)'"
 local output_dir "`r(OUTPUT_DIR)'"
 
+// Open a log so the run produces log/4-analyze-data.log alongside the
+// .Rout / .log files from the R and Python halves of the pipeline. `cap`
+// = capture; ignores the error if log/ already exists or another log
+// session is open.
+cap mkdir "log"
+cap log close
+log using "log/4-analyze-data.log", replace text
+
 display "Using data directory: `data_dir'"
 display "Using output directory: `output_dir'"
 
@@ -279,3 +287,5 @@ display "All tables saved to: `output_dir'"
 display "  LaTeX: sample-selection-stata.tex, freqtable-stata.tex,"
 display "         descrip-stata.tex, corrtable-stata.tex, regression-stata.tex"
 display "  Word:  matching .rtf files"
+
+log close

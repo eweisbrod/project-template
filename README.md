@@ -172,29 +172,38 @@ project_paths_list, add project(project-template) path("C:/_git/project-template
 
 ## Logging and Reproducibility
 
-`src/run-all.py` runs the full pipeline (download → transform → figures →
-tables → provenance) and writes a per-script `.log` file for each step
-into `log/`:
+Every numbered pipeline script writes a per-script log to `log/` in the
+project root. The file format and the underlying mechanism vary by
+language, but the visual shape (command echoed, output interleaved,
+plain text) is consistent across all four:
 
-- `1-download-data.log`
-- `2-transform-data.log`
-- `3-figures.log`
-- `4-analyze-data.log`
-- `5-data-provenance.log`
+| Language | Mechanism | Output file |
+|---|---|---|
+| R | `batch_run()` → `R CMD BATCH` | `log/<script>.Rout` |
+| Python | `batch_run()` → `run_with_echo.py` | `log/<script>.log` |
+| Stata | `log using "log/<script>.log"` at the top of the .do file | `log/<script>.log` |
+| SAS | Built-in (e.g. `sas -log log/<script>.log` from CLI) | `log/<script>.log` |
 
-Each `.log` is plain text, command-echo + output interleaved — visually
-identical to a SAS or Stata log. Step 5 also exports
-`sample-identifiers.{parquet,csv}` (gvkey, permno, rdq, datadate, fyearq,
-fqtr) into `DATA_DIR`, and prints SHA256 hashes for every raw and
-derived file inside its own `.log`.
+A pipeline run writes one log per numbered step:
 
-Implementation: `batch_run()` in `src/utils.py` shells out to
-`run_with_echo.py`, a ~30-line AST-walking wrapper that prints each
-top-level statement before `exec()`-ing it. The R-only sister template
-([project-template-r](https://github.com/eweisbrod/project-template-r))
-uses an equivalent `batch_run()` that calls `R CMD BATCH`. SAS and
-Stata produce the same log shape natively, so the four pipeline
-languages emit visually consistent logs.
+- `1-download-data.{Rout,log}`
+- `2-transform-data.{Rout,log}`
+- `3-figures.{Rout,log}`
+- `4-analyze-data.{Rout,log}`
+- `5-data-provenance.{Rout,log}`
+
+Step 5 also exports `sample-identifiers.{parquet,csv}` (gvkey, permno,
+rdq, datadate, fyearq, fqtr) into `DATA_DIR` and prints an inventory of
+every file in `RAW_DATA_DIR`, `DATA_DIR`, and `OUTPUT_DIR` with mtime,
+size, and SHA256 hash.
+
+Implementation: `batch_run()` lives in both `utils.py` and `utils.R`.
+The Python version shells out to `run_with_echo.py`, a ~30-line
+AST-walking wrapper that prints each top-level statement before
+`exec()`-ing it. The R version calls `R CMD BATCH` natively. Stata's
+`log using` is built into the .do file's preamble. SAS isn't currently
+in this template's pipeline (no `*-data.sas` files) but the same pattern
+applies if you add one.
 
 The intent is to satisfy the Journal of Accounting Research Data and
 Code Sharing Policy, which expects (i) the code that converts raw data

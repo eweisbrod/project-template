@@ -174,6 +174,29 @@ WRDS directly (it reads .dta files produced by Python).
   `2-transform-data.py`)
 - Financials (SIC 60-69) and utilities (SIC 49) excluded
 
+### Per-script logs across all four languages
+
+Every numbered pipeline script writes a per-script log to `log/` in the
+project root, regardless of which language it's implemented in. The
+file format and the underlying mechanism are different in each
+language, but the visual shape (command echoed, output interleaved,
+plain text) is consistent so a reviewer comfortable with one can read
+all four:
+
+| Language | Mechanism | Output file |
+|---|---|---|
+| R | `batch_run()` calls `R CMD BATCH` (utils.R) | `log/<script>.Rout` |
+| Python | `batch_run()` calls `run_with_echo.py` (utils.py) | `log/<script>.log` |
+| Stata | `log using "log/<script>.log"` at top of .do file | `log/<script>.log` |
+| SAS | Built-in `proc printto`, or `sas -log log/<script>.log` from CLI | `log/<script>.log` |
+
+R's `batch_run()` and Python's `batch_run()` both spawn a fresh child
+process so the log captures a clean session (no leakage from the
+parent). Stata's `log using` runs in the same Stata session — fine
+because Stata's natural workflow is one .do file per session anyway.
+SAS isn't currently in the polyglot template's pipeline (no
+`*-data.sas` files), but the same pattern would apply if added.
+
 ### Logging via batch_run (run_with_echo)
 
 `run-all.py` runs each numbered script through `batch_run()` (defined in
