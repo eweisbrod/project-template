@@ -204,8 +204,10 @@ installs and PATH-installed setups work out of the box.
 
 `run-all.{R,py}` calls `batch_run_stata()` only when
 `src/4-analyze-data.do` is on disk — i.e. when the user picked a
-Stata-inclusive combo at setup time. The presence of the .do file IS
-the gate.
+Stata-inclusive combo at setup time. If they picked R-only or
+Python-only, `project_setup()` deleted the .do file during pruning,
+so `run-all` skips the Stata step automatically. No setup-time
+mutation of `run-all` is needed.
 
 ### Logging via batch_run (run_with_echo)
 

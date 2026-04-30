@@ -74,9 +74,11 @@ def main() -> None:
                   f"see {log_path}", file=sys.stderr)
             sys.exit(result["returncode"])
 
-    # If the user picked a Stata-inclusive combo at setup, the .do file
-    # is still on disk; run it too so the Stata tables are produced as
-    # part of this pipeline run. The presence of the .do file IS the gate.
+    # If the user picked a Stata-inclusive combo at setup, the .do
+    # file is still on disk and we run it too. If they picked a
+    # Python-only or R-only combo, project_setup() deleted the .do
+    # file during pruning, so the check below is False and Stata is
+    # skipped.
     if Path("src/4-analyze-data.do").exists():
         batch_run_stata("src/4-analyze-data.do",
                         log_path=log_dir / "4-analyze-data-stata.log")

@@ -171,6 +171,31 @@ check_duplicates <- function(data, ...) {
 message("imported duplicate check function")
 
 
+# Row count for either lazy or in-memory tables -------------------------------
+
+#' Count rows of either a lazy dbplyr table or an in-memory data frame.
+#'
+#' Lets you track sample-selection counts without forcing a full
+#' `collect()` of a dbplyr query (which would pull all rows into R).
+#' For lazy tables it runs a `SELECT COUNT(*)` on the database; for
+#' in-memory data frames it just calls `nrow()`.
+#'
+#' @param x A dbplyr lazy table or a data frame / tibble.
+#' @return Integer scalar — the number of rows.
+#' @examples
+#' \dontrun{
+#'   count_rows(fundq_tbl)             # lazy: COUNT(*) on the DB
+#'   count_rows(collect(fundq_tbl))    # in-memory: nrow()
+#' }
+count_rows <- function(x) {
+  if (inherits(x, "tbl_lazy")) {
+    x |> dplyr::summarize(n = dplyr::n()) |> dplyr::pull(n) |> as.integer()
+  } else {
+    nrow(x)
+  }
+}
+
+message("imported count_rows function")
 
 
 # Streaming download to parquet ------------------------------------------------

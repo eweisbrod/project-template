@@ -27,7 +27,7 @@ import polars as pl
 from dotenv import load_dotenv
 
 # Import helpers from utils.py
-from utils import assign_ff12
+from utils import assign_ff12, winsorize
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -336,27 +336,8 @@ print(f"\nAfter filters: {data4.shape[0]:,} rows")
 
 
 # Winsorize SUE and log_mve at 1%/99%
-def winsorize(col: str, lower: float = 0.01, upper: float = 0.99) -> pl.Expr:
-    """Build a polars expression that winsorizes `col` at the given quantiles.
-
-    Replaces extreme values with the nearest non-trimmed quantile (clipping,
-    not deletion). Mirrors `winsorize_x()` in the R utils. Use inside
-    `df.with_columns(winsorize("sue"), winsorize("log_mve"))`.
-
-    Args:
-        col: Name of the column to winsorize.
-        lower: Lower-tail quantile cutoff. Default 0.01.
-        upper: Upper-tail quantile cutoff. Default 0.99.
-
-    Returns:
-        Polars expression that, when evaluated against a frame, returns
-        the winsorized version of `col` (with the same name, ready for
-        `df.with_columns()`).
-    """
-    lo = pl.col(col).quantile(lower, interpolation="lower")
-    hi = pl.col(col).quantile(upper, interpolation="higher")
-    return pl.col(col).clip(lo, hi).alias(col)
-
+# `winsorize` lives in utils.py — same as R's `winsorize_x` lives in
+# utils.R. Imported at the top of this script.
 data4 = data4.with_columns(
     winsorize("sue"),
     winsorize("log_mve"),

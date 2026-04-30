@@ -107,6 +107,31 @@ def assign_ff12(sic_col: str = "siccd") -> list[pl.Expr]:
     return [expr_name.alias("FF12"), expr_num.cast(pl.Float64).alias("ff12num")]
 
 
+def winsorize(col: str, lower: float = 0.01, upper: float = 0.99) -> pl.Expr:
+    """Build a polars expression that winsorizes `col` at the given quantiles.
+
+    Replaces extreme values with the nearest non-trimmed quantile (clipping,
+    not deletion). Mirrors `winsorize_x()` in utils.R. Use inside
+    `df.with_columns(winsorize("sue"), winsorize("log_mve"))`.
+
+    Args:
+        col: Name of the column to winsorize.
+        lower: Lower-tail quantile cutoff. Default 0.01.
+        upper: Upper-tail quantile cutoff. Default 0.99.
+
+    Returns:
+        Polars expression that, when evaluated against a frame, returns
+        the winsorized version of `col` (with the same name, ready for
+        `df.with_columns()`).
+
+    Example:
+        >>> df.with_columns(winsorize("sue"), winsorize("log_mve"))
+    """
+    lo = pl.col(col).quantile(lower, interpolation="lower")
+    hi = pl.col(col).quantile(upper, interpolation="higher")
+    return pl.col(col).clip(lo, hi).alias(col)
+
+
 def _normalize_arrow_schema(table: pa.Table) -> pa.Table:
     """Cast decimal128 columns to float64 to avoid schema mismatches.
 

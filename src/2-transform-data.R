@@ -89,22 +89,8 @@ ccm_tbl        <- tbl(con, glue("read_parquet('{raw_data_dir}/ccm-link.parquet')
 stocknames_tbl <- tbl(con, glue("read_parquet('{raw_data_dir}/crsp-stocknames.parquet')"))
 
 
-#' Count rows of either a lazy dbplyr table or an in-memory data frame.
-#'
-#' Lets us track sample-selection counts without forcing a full
-#' `collect()` of a dbplyr query (which would pull all rows into R).
-#' For lazy tables we run a `SELECT COUNT(*)` on the database; for
-#' in-memory data frames we just call `nrow()`.
-#'
-#' @param x A dbplyr lazy table or a data frame / tibble.
-#' @return Integer scalar — the number of rows.
-count_rows <- function(x) {
-  if (inherits(x, "tbl_lazy")) {
-    x |> summarize(n = n()) |> pull(n) |> as.integer()
-  } else {
-    nrow(x)
-  }
-}
+# count_rows() lives in utils.R — it's general enough to reuse across
+# scripts that mix dbplyr and collected frames.
 
 # Define the sample period. The downloaded fundq already filters fyearq >= 1970
 # (see script 1). We cap at 2024 because partial years (2025 has ~3 quarters,
