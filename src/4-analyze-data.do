@@ -1,33 +1,35 @@
-/******************************************************************************
+/*******************************************************************************
  * 4-analyze-data.do
- * Regression analysis and table output for the earnings event study.
  *
- * This script produces all tables in BOTH LaTeX (.tex) and Word (.rtf) formats
- * from a single run. It reads the .dta files created by Python script 2:
- *   - regdata.dta            (main analysis dataset)
- *   - sample-selection.dta   (step-by-step sample counts from script 2)
+ * Purpose:
+ *   Produce regression tables and descriptive statistics for the
+ *   earnings event study, exported in BOTH LaTeX (.tex) and Word
+ *   (.rtf / .docx) formats from a single run.
  *
- * Tables:
- *   1. Sample selection (LaTeX + RTF)
- *   2. Frequency table by decade (LaTeX + RTF)
- *   3. Descriptive statistics (LaTeX + RTF)
- *   4. Correlation matrix (LaTeX + RTF)
- *   5. Regression table with SUE x SameSign interaction (LaTeX + RTF)
+ * Inputs (from DATA_DIR):
+ *   regdata.dta
+ *   sample-selection.dta
  *
- * FIRST-TIME SETUP:
- *   Install required packages (uncomment and run once per computer):
- *     ssc install estout
- *     ssc install reghdfe
- *     net install projectpaths, from("https://raw.githubusercontent.com/eweisbrod/projectpaths/main/src/") replace
- *     net install doenv, from("https://github.com/vikjam/doenv/raw/master/")
+ * Outputs (to OUTPUT_DIR):
+ *   sample-selection-stata.tex / .docx   Sample selection (obs counts)
+ *   freqtable-stata.tex / .rtf           Frequency table by decade
+ *   descrip-stata.tex / .rtf             Descriptive statistics
+ *   corrtable-stata.tex / .rtf           Correlation matrix
+ *   regression-stata.tex / .rtf          Main regression table
  *
- *   Register this project with projectpaths (replace path with YOUR clone path):
- *     project_paths_list, add project(project-template) path("C:/_git/project-template")
- *
- * HOW TO RUN:
- *   do src/4-analyze-data.do
- *
- * The same .env file works across R, Python, and Stata — setup.py creates it.
+ * Notes:
+ *   - Filename suffix `-stata` keeps the parallel R and Python table
+ *     outputs from colliding in OUTPUT_DIR.
+ *   - First-time setup (run once per machine):
+ *       ssc install estout
+ *       ssc install reghdfe
+ *       net install projectpaths, from("https://raw.githubusercontent.com/eweisbrod/projectpaths/main/src/") replace
+ *       net install doenv, from("https://github.com/vikjam/doenv/raw/master/")
+ *       project_paths_list, add project(project-template) path("C:/_git/project-template")
+ *   - The same .env file works across R, Python, and Stata — setup.py
+ *     or project_setup() creates it on first run of the pipeline.
+ *   - Requires Stata 17+ (uses the `collect` framework for sample
+ *     selection and descriptives).
  ******************************************************************************/
 
 

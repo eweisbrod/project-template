@@ -1,31 +1,33 @@
-# run-all.R — Run the full pipeline; each script writes its own .Rout
-# ============================================================================
-# HOW TO RUN: Open this script in RStudio and run interactively
-# (Ctrl+A, Ctrl+Enter), or step through line by line.
+# ==============================================================================
+# run-all.R
 #
-# Each numbered script is executed via batch_run(), which calls R CMD BATCH
-# in a fresh child process and writes a sibling .Rout file capturing:
-#   - R version banner + start timestamp + working directory
-#   - Every command echoed with `> ` / `+ `
-#   - Output, messages, warnings, errors interleaved
-#   - proc.time() at the end (user/system/elapsed seconds)
+# Purpose:
+#   Master orchestrator that runs the full pipeline in language-aware
+#   order (R steps via R CMD BATCH; the Stata .do file via Stata if it
+#   is on disk after setup pruning).
 #
-# The five .Rout files (1-download, 2-transform, 3-figures, 4-analyze,
-# 5-provenance) for one pipeline run land in log/<script>.Rout. A fresh
-# run overwrites the previous run's logs — the file mtime and the
-# proc.time block inside each .Rout tell you when it was produced.
-# Together they are the JAR Data and Code Sharing Policy artifacts:
-#   1. The .R files (committed) are the code that produced the results.
-#   2. The .Rout files are the comprehensive logs of execution.
-#   3. 5-data-provenance.R writes sample-identifiers.{parquet,csv} into
-#      DATA_DIR — the regression-sample row identifiers.
+# Inputs:
+#   src/1-download-data.R, src/2-transform-data.R, src/3-figures.R,
+#   src/4-analyze-data.R, src/5-data-provenance.R, and conditionally
+#   src/4-analyze-data.do (if a Stata-inclusive combo was chosen).
 #
-# This script does NOT capture its own output (no run-all.log). The
-# per-script .Rout files ARE the logs; the orchestration here is just
-# "call the next batch_run." If you ever want a master log, you can
-# `R CMD BATCH src/run-all.R run-all.Rout` from a terminal — but it's
-# normally not needed.
-# ============================================================================
+# Outputs (to log/):
+#   1-download-data.Rout, 2-transform-data.Rout, 3-figures.Rout,
+#   4-analyze-data.Rout, 5-data-provenance.Rout, and conditionally
+#   4-analyze-data-stata.log. Each is the .Rout / .log produced by
+#   batch_run() / batch_run_stata().
+#
+# Notes:
+#   - Open in RStudio and run interactively (Ctrl+A, Ctrl+Enter), or
+#     step through line by line.
+#   - This script does NOT capture its own output. The per-script logs
+#     ARE the audit trail; the orchestration here is just "call the
+#     next batch_run." If you want a master log too, run from a
+#     terminal: `R CMD BATCH src/run-all.R run-all.Rout`.
+#   - A fresh run overwrites the previous run's logs. The file mtime
+#     and the proc.time block inside each .Rout tell you when it was
+#     produced.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

@@ -1,27 +1,35 @@
+# ==============================================================================
 # 1-download-data.py
-# ===========================================================================
-# Download data for the earnings event study to local parquet files.
 #
-# This script downloads raw tables from WRDS (Wharton Research Data Services)
-# and saves them as parquet files. It showcases two download approaches:
+# Purpose:
+#   Download raw WRDS tables to local parquet files. Demonstrates two
+#   download approaches at increasing levels of RAM efficiency:
+#     1. polars.read_database() into a DataFrame (CCM link, CRSP
+#        stocknames) — simplest, full result in memory.
+#     2. Chunked pyarrow.ParquetWriter via a psycopg2 server-side cursor
+#        (Compustat fundq, CRSP daily, market index). Peak memory = one
+#        batch, bounded regardless of table size.
 #
-#   1. Small tables (CCM link, stocknames): load the full result into a polars
-#      DataFrame with polars.read_database(), then write to parquet.
-#   2. Large tables (fundq, CRSP daily): stream rows in batches via a
-#      server-side cursor, writing each batch to parquet with pyarrow's
-#      ParquetWriter. Peak memory = one batch, not the full table.
+# Inputs:
+#   WRDS PostgreSQL endpoint (credentials from the OS keyring; service
+#   `wrds`, keys `username` and `password`, stored once by setup).
 #
-# WHY TWO METHODS?
-# polars.read_database() loads the entire result into memory. This is fine
-# for small tables, but for large ones like CRSP daily (~100M rows) it can
-# exceed your RAM and crash Python. The chunked ParquetWriter approach
-# streams data in batches, so memory stays bounded regardless of table size.
+# Outputs (to RAW_DATA_DIR):
+#   ccm-link.parquet         CCM link table (gvkey -> permno)
+#   crsp-stocknames.parquet  CRSP SIC codes by permno + date range
+#   fundq-raw.parquet        Compustat quarterly fundamentals
+#   crsp-dsf-v2.parquet      CRSP daily stock returns
+#   crsp-index.parquet       CRSP value-weighted market index returns
 #
-# HOW TO RUN:
-#   uv run src/1-download-data.py
-# uv automatically manages the virtual environment and installs dependencies
-# from pyproject.toml — no manual pip install or venv activation needed.
-# ===========================================================================
+# Notes:
+#   - Run via `uv run src/1-download-data.py`. uv manages the virtual
+#     env and installs dependencies from pyproject.toml automatically.
+#   - download_parquet() (the wrapper for the chunked approach) defaults
+#     to skip_if_exists=True, so a re-run does NOT re-pull anything
+#     already on disk. Delete a file in RAW_DATA_DIR to force a refresh.
+#   - Runtime: ~15-20 minutes for the full pull. CRSP daily is the long
+#     pole at ~100M rows.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

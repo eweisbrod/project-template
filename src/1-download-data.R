@@ -1,31 +1,36 @@
+# ==============================================================================
 # 1-download-data.R
-# ===========================================================================
-# Download data for the earnings event study to local parquet files.
 #
-# This script downloads raw tables and merges them locally. It showcases three 
-# different methods for downloading data from WRDS, each with different 
-# RAM usage and speed characteristics:
-#   1. Download CCM link + CRSP stocknames (small — simple collect)
-#   2. Download Compustat fundq (medium — chunked ParquetFileWriter)
-#   3. Download CRSP daily returns (large — using download_parquet() wrapper)
+# Purpose:
+#   Download raw WRDS tables to local parquet files. Demonstrates three
+#   download approaches at increasing levels of RAM efficiency:
+#     1. collect() into a tibble (CCM link, CRSP stocknames) — simplest.
+#     2. Chunked ParquetFileWriter (Compustat fundq) — bounded RAM.
+#     3. download_parquet() helper (CRSP daily, market index) — same as
+#        #2 but wrapped, with auto-sized batches and a skip-if-exists
+#        default.
 #
-# Each download demonstrates a different method, from simplest to most
-# RAM-efficient.
+# Inputs:
+#   WRDS PostgreSQL endpoint (credentials from the OS keyring; service
+#   `wrds`, keys `username` and `password`, stored once by setup).
 #
+# Outputs (to RAW_DATA_DIR):
+#   ccm-link.parquet         CCM link table (gvkey -> permno)
+#   crsp-stocknames.parquet  CRSP SIC codes by permno + date range
+#   fundq-raw.parquet        Compustat quarterly fundamentals
+#   crsp-dsf-v2.parquet      CRSP daily stock returns
+#   crsp-index.parquet       CRSP value-weighted market index returns
 #
-# WHY THREE METHODS?
-# 1) The simplest approach (collect) loads the entire table into R memory.
-# This works for small tables, but for large ones like CRSP daily (~100M rows)
-# it can exceed your RAM and crash R. 
-
-# 2) The chunked ParquetFileWriter method streams data in batches,
-#  so peak memory stays bounded regardless of table size.
-#
-#
-# 3) The download_parquet() function wraps method 2) in a function in in utils.R. 
-# It auto-sizes batches based on a target RAM limit (default 8 GB) 
-# so you don't have to think about it.
-# ===========================================================================
+# Notes:
+#   - WRDS-side filters are applied for tables that have a clear single
+#     use (fundq's indfmt/datafmt/popsrc/consol filters); full tables
+#     are downloaded when downstream reuse is plausible.
+#   - Skip-if-exists guards in each download block mean a re-run does
+#     NOT re-pull anything already on disk. Delete a file in
+#     RAW_DATA_DIR to force a refresh.
+#   - Runtime: ~15-20 minutes for the full pull. CRSP daily is the long
+#     pole at ~100M rows.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

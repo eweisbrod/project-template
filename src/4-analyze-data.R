@@ -1,23 +1,30 @@
+# ==============================================================================
 # 4-analyze-data.R
-# ===========================================================================
-# Regression analysis and table output for the earnings event study.
 #
-# This script produces all tables in BOTH LaTeX and Word formats from a
-# single run. Models are fit once; each table is then exported twice:
-#   - LaTeX .tex files (for Overleaf / pdflatex)
-#   - A combined Word .docx file (via flextable + officer)
+# Purpose:
+#   Produce regression tables and descriptive statistics for the earnings
+#   event study. Each table is exported in BOTH LaTeX (.tex) and Word
+#   (.docx) formats from a single run; models are fit once and then
+#   re-formatted for each output.
 #
-# Tables:
-#   1. Sample selection (step-by-step obs counts from script 2)
-#   2. Frequency table by decade (SameSign counts)
-#   3. Descriptive statistics (modelsummary's datasummary)
-#   4. Correlation matrix (Pearson above, Spearman below)
-#   5. Regression table (SUE × SameSign interaction, FE, clustered SEs)
+# Inputs (from DATA_DIR):
+#   regdata.parquet
+#   sample-selection.parquet
 #
-# HOW TO RUN:
-#   Open in RStudio and run interactively, or:
-#   Rscript src/4-analyze-data.R
-# ===========================================================================
+# Outputs (to OUTPUT_DIR):
+#   sample-selection-r.tex   Sample selection (step-by-step obs counts)
+#   freqtable-r.tex          Frequency table by decade (SameSign counts)
+#   descrip-r.tex            Descriptive statistics
+#   corrtable-r.tex          Correlation matrix (Pearson above, Spearman below)
+#   regression-r.tex         Main regression table (SUE × SameSign + FE)
+#   tables-r.docx            All five tables as a single Word document
+#
+# Notes:
+#   - Regressions: progressively richer cumulative-FE specifications,
+#     with standard errors clustered by firm and fiscal year-quarter.
+#   - Filename suffix `-r` keeps the parallel Python and Stata table
+#     outputs from colliding in OUTPUT_DIR.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

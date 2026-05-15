@@ -1,23 +1,30 @@
+# ==============================================================================
 # 4-analyze-data.py
-# ===========================================================================
-# Regression analysis and table output for the earnings event study.
 #
-# This script produces:
-#   1. Sample selection table (LaTeX via great_tables)
-#   2. Frequency table by decade (LaTeX via great_tables)
-#   3. Descriptive statistics (LaTeX via great_tables)
-#   4. Correlation matrix (LaTeX via great_tables)
-#   5. Regression table with SUE x SameSign interaction (LaTeX via pyfixest)
+# Purpose:
+#   Produce regression tables and descriptive statistics for the
+#   earnings event study, exported to LaTeX.
 #
-# Tables 1-4 use great_tables (by Posit), which provides a clean API for
-# building publication-ready tables and exporting to LaTeX. Table 5 uses
-# pyfixest's native etable(type="tex") because great_tables' LaTeX export
-# does not yet support row stubs/groups, which pyfixest uses for the
-# regression layout.
+# Inputs (from DATA_DIR):
+#   regdata.parquet
+#   sample-selection.parquet
 #
-# HOW TO RUN:
-#   uv run src/4-analyze-data.py
-# ===========================================================================
+# Outputs (to OUTPUT_DIR):
+#   sample-selection-py.tex   Sample selection (step-by-step obs counts)
+#   freqtable-py.tex          Frequency table by decade (SameSign counts)
+#   descrip-py.tex            Descriptive statistics
+#   corrtable-py.tex          Correlation matrix
+#   regression-py.tex         Main regression table (SUE × SameSign + FE)
+#
+# Notes:
+#   - Run via `uv run src/4-analyze-data.py`.
+#   - Tables 1-4 use great_tables (Posit) for the LaTeX export.
+#   - Table 5 uses pyfixest's native `etable(type="tex")` because
+#     great_tables' LaTeX export doesn't yet support the row stubs /
+#     groups that pyfixest uses for the regression layout.
+#   - Filename suffix `-py` keeps the parallel R and Stata table outputs
+#     from colliding in OUTPUT_DIR.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

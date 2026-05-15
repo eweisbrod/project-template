@@ -1,16 +1,34 @@
+# ==============================================================================
 # 2-transform-data.R
-# ===========================================================================
-# Merge downloaded tables, create variables, and link with CRSP returns.
 #
-# This script takes the raw parquet files from script 1 and:
-#   1. Cleans fundq and merges it with CCM link + stocknames via DuckDB/dbplyr
-#   2. Creates seasonal lags via explicit fiscal-period joins
-#   3. Creates split-adjusted SUE, the SameSign indicator, and control variables
-#   4. Applies sample filters and winsorizes continuous variables
-#   5. Builds trading day windows and pulls CRSP event returns via DuckDB
-#   6. Computes BHARs (buy-and-hold abnormal returns)
-#   7. Saves analysis-ready datasets for scripts 3 (figures) and 4 (tables)
-# ===========================================================================
+# Purpose:
+#   Merge raw WRDS tables into the firm-quarter regression sample, with
+#   SUE, SameSign, and control variables computed and CRSP event-window
+#   returns joined in.
+#
+# Inputs (from RAW_DATA_DIR):
+#   fundq-raw.parquet
+#   ccm-link.parquet
+#   crsp-stocknames.parquet
+#   crsp-dsf-v2.parquet
+#   crsp-index.parquet
+#
+# Outputs (to DATA_DIR):
+#   regdata.parquet           Main analysis dataset (one row per firm-quarter)
+#   regdata.dta               Same as parquet, for the Stata half of the pipeline
+#   figure-data.parquet       Long-format event-window BHARs, for the CAR plot
+#   trading-dates.parquet     CRSP trading-day calendar with sequential td index
+#   sample-selection.parquet  Step-by-step row counts for the published table
+#   sample-selection.dta      Same, for Stata
+#
+# Notes:
+#   - Demonstrates three merge approaches: dbplyr-over-DuckDB (fundq + CCM
+#     + stocknames), raw DuckDB SQL (CRSP returns merge), and base R / dplyr
+#     (small in-memory transformations).
+#   - DuckDB progress bar is disabled to keep the .Rout file clean for
+#     journal data-policy submission.
+#   - SUE and log_mve are winsorized at 1% / 99%.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

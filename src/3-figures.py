@@ -1,23 +1,26 @@
+# ==============================================================================
 # 3-figures.py
-# ===========================================================================
-# Publication-ready figures for the earnings event study.
 #
-# This script uses plotnine, which implements the Grammar of Graphics
-# (ggplot2) in Python. The syntax is nearly identical to ggplot2 in R,
-# making it easy to translate between languages.
+# Purpose:
+#   Produce publication-ready figures for the earnings event study using
+#   plotnine (Grammar of Graphics in Python — nearly identical syntax to
+#   ggplot2 in R, making the two implementations easy to compare).
 #
-# Figures:
-#   1. Horizontal bar chart: SameSign frequency by FF12 industry
-#   2. Multi-line time series: SameSign by size quintile over time
-#   3. Correlation matrix heatmap (seaborn)
-#   4. Event study CAR plot: 4 lines (SUE direction × SameSign)
-#   5. Year-by-year ERC with confidence bands
+# Inputs (from DATA_DIR):
+#   regdata.parquet
+#   figure-data.parquet
 #
-# Each figure is saved in both PDF (for LaTeX) and PNG (for Word/PowerPoint).
+# Outputs (to OUTPUT_DIR):
+#   ff12_fig.{pdf,png}      Bar chart: SameSign frequency by FF12 industry
+#   size_year.{pdf,png}     Multi-line time series: SameSign by size quintile
+#   corr_fig.{pdf,png}      Correlation matrix heatmap (seaborn)
+#   car_fig.{pdf,png}       Event-study CAR plot, four lines (SUE × SameSign)
+#   erc_year.{pdf,png}      Year-by-year ERC with confidence bands
 #
-# HOW TO RUN:
-#   uv run src/3-figures.py
-# ===========================================================================
+# Notes:
+#   - Run via `uv run src/3-figures.py`.
+#   - PDF for LaTeX, PNG for Word / PowerPoint. Both are saved every run.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

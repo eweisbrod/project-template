@@ -1,19 +1,32 @@
+# ==============================================================================
 # 2-transform-data.py
-# ===========================================================================
-# Merge downloaded tables, create variables, and link with CRSP returns.
 #
-# This script takes the raw parquet files from script 1 and:
-#   1. Cleans fundq and merges it with CCM link + stocknames via DuckDB
-#   2. Creates seasonal lags via explicit fiscal-period joins
-#   3. Creates SUE (delta ibq / mve), the SameSign indicator, and controls
-#   4. Applies sample filters and winsorizes continuous variables
-#   5. Builds trading day windows and pulls CRSP event returns via DuckDB
-#   6. Computes BHARs (buy-and-hold abnormal returns)
-#   7. Saves analysis-ready datasets for scripts 3 and 4
+# Purpose:
+#   Merge raw WRDS tables into the firm-quarter regression sample, with
+#   SUE, SameSign, and control variables computed and CRSP event-window
+#   returns joined in.
 #
-# HOW TO RUN:
-#   uv run src/2-transform-data.py
-# ===========================================================================
+# Inputs (from RAW_DATA_DIR):
+#   fundq-raw.parquet
+#   ccm-link.parquet
+#   crsp-stocknames.parquet
+#   crsp-dsf-v2.parquet
+#   crsp-index.parquet
+#
+# Outputs (to DATA_DIR):
+#   regdata.parquet           Main analysis dataset (one row per firm-quarter)
+#   regdata.dta               Same as parquet, for the Stata half of the pipeline
+#   figure-data.parquet       Long-format event-window BHARs, for the CAR plot
+#   trading-dates.parquet     CRSP trading-day calendar with sequential td index
+#   sample-selection.parquet  Step-by-step row counts for the published table
+#   sample-selection.dta      Same, for Stata
+#
+# Notes:
+#   - Run via `uv run src/2-transform-data.py`.
+#   - DuckDB does the heavy lifting (querying parquet files directly,
+#     joining CRSP daily without loading all 100M rows into memory).
+#   - SUE and log_mve are winsorized at 1% / 99%.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

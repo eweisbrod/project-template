@@ -1,34 +1,34 @@
-# run-all.py — Run the full pipeline; each script writes its own .log
-# ============================================================================
-# HOW TO RUN:
-#   uv run src/run-all.py
+# ==============================================================================
+# run-all.py
 #
-# Each numbered script is executed via batch_run() (utils.py), which spawns
-# a fresh Python subprocess via run_with_echo.py and writes a sibling .log
-# capturing:
-#   - "Started: ..." timestamp at the top.
-#   - Every top-level statement echoed with `>>> ` / `... ` continuations.
-#   - print() output interleaved with the statements.
-#   - Warnings written to stderr captured into the same log.
+# Purpose:
+#   Master orchestrator that runs the full pipeline in language-aware
+#   order (Python steps via run_with_echo.py; the Stata .do file via
+#   batch_run_stata if it is on disk after setup pruning).
 #
-# The five .log files (1-download, 2-transform, 3-figures, 4-analyze,
-# 5-provenance) for one pipeline run land in log/<script>.log. A fresh
-# run overwrites the previous run's logs — the file mtime and the
-# "Started:" line inside each script tell you when it was produced.
-# Together they are the JAR Data and Code Sharing Policy artifacts:
-#   1. The .py files (committed) are the code that produced the results.
-#   2. The .log files are the comprehensive logs of execution.
-#   3. 5-data-provenance.py writes sample-identifiers.{parquet,csv} into
-#      DATA_DIR — the regression-sample row identifiers.
+# Inputs:
+#   src/1-download-data.py, src/2-transform-data.py, src/3-figures.py,
+#   src/4-analyze-data.py, src/5-data-provenance.py, and conditionally
+#   src/4-analyze-data.do (if a Stata-inclusive combo was chosen).
 #
-# This script does NOT capture its own output — the per-script .log files
-# ARE the logs; the orchestration here is just "call the next batch_run."
+# Outputs (to log/):
+#   1-download-data.log, 2-transform-data.log, 3-figures.log,
+#   4-analyze-data.log, 5-data-provenance.log, and conditionally
+#   4-analyze-data-stata.log. Each is the .log produced by batch_run()
+#   / batch_run_stata().
 #
-# The R-only sister template (project-template-r) uses an equivalent
-# batch_run() that calls R CMD BATCH instead of run_with_echo.py. SAS and
-# Stata produce the same SAS-log shape natively. All four pipeline
-# languages emit visually consistent per-script logs.
-# ============================================================================
+# Notes:
+#   - Run via `uv run src/run-all.py`.
+#   - This script does NOT capture its own output. The per-script logs
+#     ARE the audit trail; the orchestration here is just "call the
+#     next batch_run."
+#   - A fresh run overwrites the previous run's logs. The file mtime
+#     and the "Started:" line inside each .log tell you when it was
+#     produced.
+#   - The R sister `run-all.R` uses R CMD BATCH for its per-script logs;
+#     SAS and Stata produce the same visually-consistent SAS-log shape
+#     natively via their respective batch runners.
+# ==============================================================================
 
 import os
 import sys

@@ -1,21 +1,26 @@
-# 5-data-provenance.R — sample identifiers + raw/derived/output inventory
-# ============================================================================
-# Two artifacts:
+# ==============================================================================
+# 5-data-provenance.R
 #
-#   1. sample-identifiers.{parquet,csv} in DATA_DIR — the gvkey / permno /
-#      rdq triples for every observation in the regression sample. Useful
-#      to a co-author or future-self for reconstructing the sample
-#      without re-running scripts 1-2.
+# Purpose:
+#   Produce the JAR-style replication artifacts: sample identifiers and
+#   a file inventory of RAW_DATA_DIR / DATA_DIR / OUTPUT_DIR with mtime,
+#   size, and SHA256 hash for every file.
 #
-#   2. A printed inventory of every file in RAW_DATA_DIR, DATA_DIR, and
-#      OUTPUT_DIR with mtime, size, and SHA256 hash. Run via batch_run()
-#      so the inventory lands inside this script's .Rout file with the R
-#      version banner and proc.time block.
+# Inputs (from DATA_DIR):
+#   regdata.parquet
 #
-# Style note: this script leans on R's auto-print at the top level —
-# bare expressions print themselves, so we use comments as labels and
-# skip the cat()/sprintf() boilerplate.
-# ============================================================================
+# Outputs (to DATA_DIR):
+#   sample-identifiers.parquet
+#   sample-identifiers.csv
+#
+# Notes:
+#   - Intended to be run via batch_run() so the printed inventory lands
+#     inside the script's .Rout file (R version banner at the top,
+#     proc.time() block at the bottom). The .Rout itself becomes the
+#     provenance log shipped with the rest of the JAR data package.
+#   - Style: leans on R's top-level auto-print so the inventory reads
+#     cleanly in the .Rout without the noise of cat() / sprintf().
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

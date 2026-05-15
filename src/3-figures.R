@@ -1,17 +1,27 @@
+# ==============================================================================
 # 3-figures.R
-# ===========================================================================
-# Publication-ready figures for the earnings event study.
 #
-# This script demonstrates several ggplot2 techniques:
-#   1. Horizontal bar chart with reordered categories (geom_col + coord_flip)
-#   2. Multi-line time series by group (geom_line + grouped aesthetics)
-#   3. Correlation matrix heatmap (corrplot package)
-#   4. Event study CAR plot (cumulative returns over event window)
-#   5. Year-by-year regression coefficients with confidence bands
-#      (nest_by + broom::tidy + geom_ribbon)
+# Purpose:
+#   Produce publication-ready figures for the earnings event study using
+#   ggplot2.
 #
-# Each figure is saved in both PDF (for LaTeX) and PNG (for Word/PowerPoint).
-# ===========================================================================
+# Inputs (from DATA_DIR):
+#   regdata.parquet
+#   figure-data.parquet
+#
+# Outputs (to OUTPUT_DIR):
+#   ff12_fig.{pdf,png}      Bar chart: SameSign frequency by FF12 industry
+#   size_year.{pdf,png}     Multi-line time series: SameSign by size quintile
+#   corr_fig.{pdf,png}      Correlation matrix heatmap (corrplot)
+#   car_fig.{pdf,png}       Event-study CAR plot over the [-5,+5] day window
+#   erc_year.{pdf,png}      Year-by-year ERC with confidence bands
+#
+# Notes:
+#   - PDF for LaTeX, PNG for Word / PowerPoint. Both are saved every run.
+#   - Demonstrates: geom_col + coord_flip; multi-line time series with
+#     grouped aesthetics; corrplot heatmap; nest_by + broom::tidy for
+#     year-by-year coefficient extraction with geom_ribbon for the CIs.
+# ==============================================================================
 
 
 # Setup ------------------------------------------------------------------------

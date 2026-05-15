@@ -1,19 +1,25 @@
-# 5-data-provenance.py — sample identifiers + raw/derived/output inventory
-# ============================================================================
-# Two artifacts:
+# ==============================================================================
+# 5-data-provenance.py
 #
-#   1. sample-identifiers.{parquet,csv} in DATA_DIR — the gvkey / permno /
-#      rdq triples for every observation in the regression sample. Useful
-#      to a co-author or future-self for reconstructing the sample
-#      without re-running scripts 1-2.
+# Purpose:
+#   Produce the JAR-style replication artifacts: sample identifiers and
+#   a file inventory of RAW_DATA_DIR / DATA_DIR / OUTPUT_DIR with mtime,
+#   size, and SHA256 hash for every file.
 #
-#   2. A printed inventory of every file in RAW_DATA_DIR, DATA_DIR, and
-#      OUTPUT_DIR with mtime, size, and SHA256 hash. Run via batch_run()
-#      so the inventory lands inside this script's .log file.
+# Inputs (from DATA_DIR):
+#   regdata.parquet
 #
-# Run as part of run-all.py, or standalone via:
-#   uv run python -c "from utils import batch_run; batch_run('src/5-data-provenance.py')"
-# ============================================================================
+# Outputs (to DATA_DIR):
+#   sample-identifiers.parquet
+#   sample-identifiers.csv
+#
+# Notes:
+#   - Intended to be run via batch_run() so the printed inventory lands
+#     inside the script's .log file. The .log itself becomes the
+#     provenance log shipped with the rest of the JAR data package.
+#   - Standalone run:
+#       uv run python -c "from utils import batch_run; batch_run('src/5-data-provenance.py')"
+# ==============================================================================
 
 
 import hashlib
