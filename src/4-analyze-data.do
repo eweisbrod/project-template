@@ -18,7 +18,7 @@
  *   Install required packages (uncomment and run once per computer):
  *     ssc install estout
  *     ssc install reghdfe
- *     ssc install projectpaths
+ *     net install projectpaths, from("https://raw.githubusercontent.com/eweisbrod/projectpaths/main/src/") replace
  *     net install doenv, from("https://github.com/vikjam/doenv/raw/master/")
  *
  *   Register this project with projectpaths (replace path with YOUR clone path):

@@ -4,6 +4,7 @@
 # ===========================================================================
 
 import getpass
+import os
 import re
 import subprocess
 import sys
@@ -462,7 +463,8 @@ def batch_run_stata(file: str | Path,
 
 def batch_run_sas(file: str | Path,
                   log_path: str | Path | None = None,
-                  sas_bin: str | None = None) -> dict:
+                  sas_bin: str | None = None,
+                  work_dir: str | Path | None = None) -> dict:
     """Run a SAS .sas file in batch mode and write its log into log/.
 
     Mirrors `batch_run_stata()` for SAS. Uses `-SYSIN <file> -LOG <log_path>`
@@ -480,6 +482,11 @@ def batch_run_sas(file: str | Path,
         sas_bin: Override path to the SAS executable. None triggers a
             search: SAS_BIN env var → which() → common install paths
             → error.
+        work_dir: Override path for SAS's WORK library. None reads
+            SAS_WORK_DIR from the environment; if set, passes
+            `-WORK <path>` so SAS uses that directory instead of
+            %TEMP%. Useful when the system default lands on a drive
+            without enough free space for the pipeline's intermediates.
 
     Returns:
         dict with keys 'returncode' and 'log_path'.
@@ -509,9 +516,15 @@ def batch_run_sas(file: str | Path,
             'set SAS_BIN="path/to/sas.exe" in .env.'
         )
 
-    result = subprocess.run([
-        sas_bin, "-SYSIN", str(file), "-LOG", str(log_path),
-    ])
+    if work_dir is None:
+        work_dir = os.environ.get("SAS_WORK_DIR", "")
+
+    args = [sas_bin, "-SYSIN", str(file), "-LOG", str(log_path)]
+    if work_dir:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        args += ["-WORK", str(work_dir)]
+
+    result = subprocess.run(args)
 
     if result.returncode == 0:
         print(f"batch_run_sas OK -> {log_path}")

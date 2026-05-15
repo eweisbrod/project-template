@@ -513,9 +513,9 @@ batch_run_stata <- function(file,
 
   status <- system2(stata_bin, args = c("-b", "do", shQuote(file)))
 
-  # Stata's -b mode writes <basename>.log next to the .do file. Move it
-  # so all per-script logs live under log/.
-  produced <- sub("\\.do$", ".log", file, ignore.case = TRUE)
+  # Stata's -b mode writes <basename>.log into the current working directory
+  # (not next to the .do file). Move it so all per-script logs live under log/.
+  produced <- sub("\\.do$", ".log", basename(file), ignore.case = TRUE)
   if (file.exists(produced) && normalizePath(produced, mustWork = FALSE) !=
                                normalizePath(log_path, mustWork = FALSE)) {
     file.copy(produced, log_path, overwrite = TRUE)
@@ -551,6 +551,11 @@ message("imported batch_run_stata function")
 #' @param sas_bin Override path to the SAS executable. Default `NULL`
 #'   triggers a search: `SAS_BIN` env var → `Sys.which("sas")` →
 #'   common install paths → error.
+#' @param work_dir Override path for SAS's WORK library. Default `NULL`
+#'   reads `SAS_WORK_DIR` from the environment; if set, passes
+#'   `-WORK <path>` so SAS uses that directory instead of `%TEMP%`.
+#'   Useful when the system default lands on a drive without enough
+#'   free space for the pipeline's intermediate datasets.
 #'
 #' @return Invisible list with `status` (exit code) and `log_path`.
 #'
@@ -560,7 +565,8 @@ message("imported batch_run_stata function")
 #' }
 batch_run_sas <- function(file,
                           log_path = NULL,
-                          sas_bin  = NULL) {
+                          sas_bin  = NULL,
+                          work_dir = NULL) {
 
   if (!file.exists(file)) {
     stop("batch_run_sas: script not found: ", file, call. = FALSE)
@@ -588,9 +594,17 @@ batch_run_sas <- function(file,
          "SAS_BIN=\"path/to/sas.exe\" in .env.", call. = FALSE)
   }
 
-  status <- system2(sas_bin,
-                    args = c("-SYSIN", shQuote(file),
-                             "-LOG",   shQuote(log_path)))
+  if (is.null(work_dir)) {
+    work_dir <- Sys.getenv("SAS_WORK_DIR", unset = "")
+  }
+
+  args <- c("-SYSIN", shQuote(file), "-LOG", shQuote(log_path))
+  if (nzchar(work_dir)) {
+    dir.create(work_dir, showWarnings = FALSE, recursive = TRUE)
+    args <- c(args, "-WORK", shQuote(work_dir))
+  }
+
+  status <- system2(sas_bin, args = args)
 
   if (status == 0) {
     message(sprintf("batch_run_sas OK -> %s", log_path))

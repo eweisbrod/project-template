@@ -172,7 +172,7 @@ Stata requires a one-time registration of the project directory:
 ```stata
 ssc install estout
 ssc install reghdfe
-ssc install projectpaths
+net install projectpaths, from("https://raw.githubusercontent.com/eweisbrod/projectpaths/main/src/") replace
 net install doenv, from("https://github.com/vikjam/doenv/raw/master/")
 project_paths_list, add project(project-template) path("C:/_git/project-template")
 ```
